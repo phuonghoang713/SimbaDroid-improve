@@ -111,12 +111,8 @@ dependencies {
     androidTestImplementation(libs.espresso.core)
 
     implementation(libs.libsu.core)
-    implementation(libs.jfileserver) {
-        // Hazlecast is only needed for clustering and not compatible with Android anyway
-        exclude(group = "com.hazelcast", module = "hazelcast")
-        // We specify our own explicit Bouncy Castle dependency
-        exclude(group = "org.bouncycastle", module = "bcprov-jdk15on")
-    }
+    // JFileServer is built from the sources in this repository, which add SMB2/SMB3 support
+    implementation(project(":jfileserver"))
     implementation(libs.bouncycastle.bcprov)
 
     implementation(libs.jmdns)

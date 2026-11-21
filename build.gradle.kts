@@ -5,7 +5,10 @@ plugins {
 }
 
 allprojects {
-    tasks.withType<JavaCompile>().configureEach {
-        options.compilerArgs.add("-Xlint:deprecation")
+    // The vendored JFileServer sources predate many API deprecations, don't drown the app's own warnings in them
+    if (name != "jfileserver") {
+        tasks.withType<JavaCompile>().configureEach {
+            options.compilerArgs.add("-Xlint:deprecation")
+        }
     }
 }

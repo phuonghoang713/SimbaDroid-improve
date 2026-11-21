@@ -14,15 +14,9 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        mavenLocal {
-            content {
-                includeGroup("org.filesys")
-            }
-        }
         maven("https://jitpack.io") {
             content {
                 includeGroup("com.github.topjohnwu.libsu")
-                includeGroup("com.github.buttercookie42")
             }
         }
         google()
@@ -32,3 +26,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "SimbaDroid"
 include(":app")
+include(":jfileserver")

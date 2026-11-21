@@ -9,7 +9,10 @@ activity = "1.11.0"
 constraintlayout = "2.2.1"
 extprops = "2.0.1"
 supersu = "6.0.0"
-jfileserver = "ff550a7"
+jna = "5.13.0"
+gson = "2.10.1"
+smbj = "0.13.0"
+jcifsNg = "2.1.10"
 bouncycastle = "1.79"
 corelibdesugar = "2.1.5"
 apacheCommonsLang = "3.17.0"
@@ -28,7 +31,11 @@ constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayo
 libsu-core = { group = "com.github.topjohnwu.libsu", name = "core", version.ref = "supersu" }
 libsu-service = { group = "com.github.topjohnwu.libsu", name = "service", version.ref = "supersu" }
 libsu-nio = { group = "com.github.topjohnwu.libsu", name = "nio", version.ref = "supersu" }
-jfileserver = { group = "com.github.buttercookie42", name = "jfileserver", version.ref = "jfileserver"}
+jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
+jna-platform = { group = "net.java.dev.jna", name = "jna-platform", version.ref = "jna" }
+gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
+smbj = { group = "com.hierynomus", name = "smbj", version.ref = "smbj" }
+jcifs-ng = { group = "eu.agno3.jcifs", name = "jcifs-ng", version.ref = "jcifsNg" }
 bouncycastle-bcprov = { group = "org.bouncycastle", name = "bcprov-jdk15to18", version.ref = "bouncycastle" }
 corelibdesugar = { group = "com.android.tools", name = "desugar_jdk_libs_nio", version.ref = "corelibdesugar" }
 apache-commons-lang = { group = "org.apache.commons", name = "commons-lang3", version.ref = "apacheCommonsLang" }

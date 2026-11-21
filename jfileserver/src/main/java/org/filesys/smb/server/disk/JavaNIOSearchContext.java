@@ -22,6 +22,7 @@ package org.filesys.smb.server.disk;
 
 import java.io.IOException;
 import java.nio.file.*;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 import java.util.Iterator;
 
@@ -174,187 +175,154 @@ public class JavaNIOSearchContext extends SearchContext {
      */
     public boolean nextFileInfo(FileInfo info) {
 
-        //  Get the next file information
-        boolean infoValid = false;
+        //  Check for a single file/folder search
+        if (isSingleFileSearch()) {
 
+            //  Check if we have already returned the root file details
+            if (m_idx != 0)
+                return false;
+
+            //  Update the file index, indicates that we have returned the single file/directory details
+            m_idx++;
+
+            try {
+                buildFileInfo(m_root, info, false);
+                info.setFileId(m_root.toString().hashCode());
+                return true;
+            }
+            catch (IOException ex) {
+                m_cachedFileInfo = null;
+                return false;
+            }
+        }
+
+        //  Check if the search has been restarted at the last entry that was returned
+        if (m_restartFromCache == true && m_cachedFileInfo != null) {
+            m_restartFromCache = false;
+            info.copyFrom(m_cachedFileInfo);
+            return true;
+        }
+
+        if (m_pathIter == null)
+            return false;
+
+        //  Find the next file/folder that matches the search pattern
         try {
+            while (m_pathIter.hasNext()) {
 
-            if (isSingleFileSearch()) {
-
-                //  Check if we have already returned the root file details
-                if (m_idx == 0) {
-
-                    //  Update the file index, indicates that we have returned the single file/directory
-                    //  details.
-                    m_idx++;
-
-                    //  Determine if the search is for a file or directory
-                    int fattr = 0;
-                    long flen = 0L;
-
-                    if (Files.isDirectory(m_root, LinkOption.NOFOLLOW_LINKS))
-                        fattr = FileAttribute.Directory;
-                    else
-                        flen = Files.size(m_root);
-
-                    //	Check if the file/folder is read-only
-                    if ( Files.isWritable(m_root) == false)
-                        fattr += FileAttribute.ReadOnly;
-
-                    // Check if the file/folder is hidden
-                    if ( Files.isHidden(m_root))
-                        fattr += FileAttribute.Hidden;
-
-                    // If no attributes are set mark as a normal file
-                    if  ( fattr == 0)
-                        fattr = FileAttribute.NTNormal;
-
-                    //  Return the file information
-                    info.setFileName(m_root.getFileName().toString());
-                    info.setSize(flen);
-                    info.setFileAttributes(fattr);
-                    info.setFileId(m_root.toString().hashCode());
-
-                    FileTime modifyDate = Files.getLastModifiedTime(m_root, LinkOption.NOFOLLOW_LINKS);
-                    long modifyDateMs = modifyDate.toMillis();
-
-                    info.setModifyDateTime(modifyDateMs);
-                    info.setChangeDateTime(modifyDateMs);
-                    info.setAccessDateTime(modifyDateMs);
-
-                    long dummyCreate = JavaNIODiskDriver.getGlobalCreateDateTime();
-
-                    if (dummyCreate > modifyDateMs)
-                        dummyCreate = modifyDateMs;
-                    info.setCreationDateTime(dummyCreate);
-
-                    //  Indicate that the file information is valid
-                    infoValid = true;
-                }
-            }
-            else if (m_restartFromCache == true && m_cachedFileInfo != null) {
-                m_restartFromCache = false;
-                info.copyFrom(m_cachedFileInfo);
-                infoValid = true;
-            }
-            else if (m_pathIter != null && m_pathIter.hasNext()) {
-
-                // Find the next file/folder that matches the search attributes
-                boolean foundMatch = false;
                 Path curPath = m_pathIter.next();
                 m_idx++;
 
-                while( foundMatch == false && curPath != null) {
+                String fname = curPath.getFileName().toString();
 
-                    //	Check if the file name matches the search pattern
-                    if (m_wildcard.matchesPattern(curPath.getFileName().toString())) {
+                if (m_wildcard.matchesPattern(fname) == false)
+                    continue;
 
-                        //  Check if the file matches the search attributes
-                        if (FileAttribute.hasAttribute(m_attr, FileAttribute.Directory) &&
-                                Files.isDirectory( curPath, LinkOption.NOFOLLOW_LINKS)) {
+                try {
+                    buildFileInfo(curPath, info, true);
+                }
+                catch (IOException ex) {
 
-                            //  Found a match
-                            foundMatch = true;
-                        }
-                        else {
-
-                            //  Found a match
-                            foundMatch = true;
-                        }
-                    }
-
-                    //	Check if we found a match
-                    if (foundMatch == false) {
-
-                        //  Get the next path, if available
-                        if ( m_pathIter.hasNext()) {
-                            curPath = m_pathIter.next();
-                            m_idx++;
-                        }
-                        else
-                            curPath = null;
-                    }
+                    //  The details of this entry are not available, for example it has just been deleted or we
+                    //  are not allowed to access it. Skip it rather than ending the search early.
+                    continue;
                 }
 
-                //  Check if there is a path to return information for
-                if (curPath != null) {
+                // Build the share relative file path to generate the file id
+                info.setFileId((m_relPath + fname).hashCode());
 
-                    //  Create a file information object for the file
-                    int fattr = 0;
-                    long flen = 0L;
-                    long falloc = 0L;
-
-                    String fname = curPath.getFileName().toString();
-
-                    if ( Files.isDirectory(curPath, LinkOption.NOFOLLOW_LINKS)) {
-
-                        // Set the directory attribute
-                        fattr = FileAttribute.Directory;
-
-                        // Check if the diretory should be hidden
-                        if ( Files.isHidden( curPath))
-                            fattr += FileAttribute.Hidden;
-                    }
-                    else {
-
-                        //	Set the file length
-                        flen = Files.size( curPath);
-                        falloc = (flen + 512L) & 0xFFFFFFFFFFFFFE00L;
-
-                        //	Check if the file/folder is read-only
-                        if (Files.isWritable( curPath) == false)
-                            fattr += FileAttribute.ReadOnly;
-
-                        //	Check for common hidden files
-                        if ( Files.isHidden( curPath))
-                            fattr += FileAttribute.Hidden;
-                        else if (fname.equalsIgnoreCase("Desktop.ini") ||
-                                fname.equalsIgnoreCase("Thumbs.db") ||
-                                fname.startsWith("."))
-                            fattr += FileAttribute.Hidden;
-                    }
-
-                    //  Create the file information object
-                    info.setFileName(curPath.getFileName().toString());
-                    info.setSize(flen);
-                    info.setAllocationSize( falloc);
-                    info.setFileAttributes(fattr);
-
-                    // Build the share relative file path to generate the file id
-                    StringBuffer relPath = new StringBuffer();
-                    relPath.append(m_relPath);
-                    relPath.append(curPath.getFileName().toString());
-
-                    info.setFileId(relPath.toString().hashCode());
-
-                    // Set the file timestamps
-                    FileTime modifyDate = Files.getLastModifiedTime( curPath, LinkOption.NOFOLLOW_LINKS);
-                    long modifyDateMs = modifyDate.toMillis();
-
-                    info.setModifyDateTime(modifyDateMs);
-                    info.setChangeDateTime(modifyDateMs);
-                    info.setAccessDateTime(modifyDateMs);
-
-                    long dummyCreate = JavaNIODiskDriver.getGlobalCreateDateTime();
-
-                    if (dummyCreate > modifyDateMs)
-                        dummyCreate = modifyDateMs;
-                    info.setCreationDateTime(dummyCreate);
-
-                    //  Indicate that the file information is valid
-                    infoValid = true;
-
-                    m_cachedFileInfo = info;
-                }
+                m_cachedFileInfo = info;
+                return true;
             }
         }
-        catch ( IOException ex) {
-            infoValid = false;
-            m_cachedFileInfo = null;
+        catch (DirectoryIteratorException ex) {
+
+            //  Error reading the folder, end the search
         }
 
-        //  Return the file information valid state
-        return infoValid;
+        //  No more entries
+        m_cachedFileInfo = null;
+        return false;
+    }
+
+    /**
+     * Fill in the file information for a path
+     *
+     * @param path             Path
+     * @param info             FileInfo
+     * @param checkHiddenNames boolean true to mark commonly hidden file names as hidden
+     * @exception IOException Error accessing the file
+     */
+    private void buildFileInfo(Path path, FileInfo info, boolean checkHiddenNames)
+            throws IOException {
+
+        //  Get the file attributes using a single call. If the path is a symbolic link use the details of the
+        //  link target where possible.
+        BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+
+        if (attrs.isSymbolicLink()) {
+            try {
+                attrs = Files.readAttributes(path, BasicFileAttributes.class);
+            }
+            catch (IOException ex) {
+                //  Broken link, use the details of the link itself
+            }
+        }
+
+        String fname = path.getFileName().toString();
+
+        int fattr = 0;
+        long flen = 0L;
+        long falloc = 0L;
+
+        if (attrs.isDirectory()) {
+
+            //  Set the directory attribute
+            fattr = FileAttribute.Directory;
+
+            //  Check if the directory should be hidden
+            if (Files.isHidden(path))
+                fattr += FileAttribute.Hidden;
+        }
+        else {
+
+            //  Set the file length
+            flen = attrs.size();
+            falloc = (flen + 512L) & 0xFFFFFFFFFFFFFE00L;
+
+            //  Check if the file is read-only
+            if (Files.isWritable(path) == false)
+                fattr += FileAttribute.ReadOnly;
+
+            //  Check for hidden files
+            if (Files.isHidden(path))
+                fattr += FileAttribute.Hidden;
+            else if (checkHiddenNames && (fname.equalsIgnoreCase("Desktop.ini") ||
+                    fname.equalsIgnoreCase("Thumbs.db") ||
+                    fname.startsWith(".")))
+                fattr += FileAttribute.Hidden;
+        }
+
+        if (fattr == 0)
+            fattr = FileAttribute.NTNormal;
+
+        info.setFileName(fname);
+        info.setSize(flen);
+        info.setAllocationSize(falloc);
+        info.setFileAttributes(fattr);
+
+        //  Set the file timestamps
+        long modifyDateMs = attrs.lastModifiedTime().toMillis();
+
+        info.setModifyDateTime(modifyDateMs);
+        info.setChangeDateTime(modifyDateMs);
+        info.setAccessDateTime(modifyDateMs);
+
+        long dummyCreate = JavaNIODiskDriver.getGlobalCreateDateTime();
+
+        if (dummyCreate > modifyDateMs)
+            dummyCreate = modifyDateMs;
+        info.setCreationDateTime(dummyCreate);
     }
 
     /**
@@ -389,7 +357,7 @@ public class JavaNIOSearchContext extends SearchContext {
                     return fName;
                 }
                 else
-                    curPath = m_pathIter.next();
+                    curPath = m_pathIter.hasNext() ? m_pathIter.next() : null;
             }
         }
 

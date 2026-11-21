@@ -477,7 +477,7 @@ public class SMBServer extends NetworkFileServer implements Runnable, Configurat
             if (getSMBConfiguration().getEnabledDialects().hasDialect(Dialect.NT) == true) {
 
                 // Enable the NT server flag
-                getSMBConfiguration().setServerType(getServerType() + ServerType.NTServer);
+                getSMBConfiguration().setServerType(getServerType() | ServerType.NTServer);
 
                 // Debug
                 if (Debug.EnableInfo && hasDebug())

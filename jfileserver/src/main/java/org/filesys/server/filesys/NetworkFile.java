@@ -262,6 +262,16 @@ public abstract class NetworkFile {
     }
 
     /**
+     * Return the file size that the client has requested but that has not yet been applied to the underlying file,
+     * for file implementations that defer extending a file.
+     *
+     * @return long Pending file size, or -1 if there is no pending size
+     */
+    public long getPendingFileSize() {
+        return -1L;
+    }
+
+    /**
      * Get the file size, in bytes.
      *
      * @return int

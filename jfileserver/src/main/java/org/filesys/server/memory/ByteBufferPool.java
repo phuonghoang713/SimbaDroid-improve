@@ -46,7 +46,7 @@ public class ByteBufferPool {
     public ByteBufferPool(int[] bufSizes, int[] initAlloc, int[] maxAlloc) {
 
         // Validate the buffer size, initial allocation and max allocation arrays
-        if ((bufSizes.length != initAlloc.length) && (bufSizes.length != maxAlloc.length))
+        if ((bufSizes.length != initAlloc.length) || (bufSizes.length != maxAlloc.length))
             throw new RuntimeException("Invalid ByteBufferPool parameters");
 
         // Save the buffer details

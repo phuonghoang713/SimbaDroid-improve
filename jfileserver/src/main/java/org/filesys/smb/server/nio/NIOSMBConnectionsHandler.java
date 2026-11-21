@@ -48,6 +48,10 @@ import org.filesys.smb.server.SMBSrvSession;
  */
 public class NIOSMBConnectionsHandler implements SMBConnectionsHandler, RequestHandlerListener, Runnable {
 
+    // Time to wait for the connections handler thread to release the listening sockets when stopping
+    private static final long StopTimeoutMs = 2500L;
+
+
     // Constants
     //
     // Number of session socket channels each request handler thread monitors
@@ -357,17 +361,44 @@ public class NIOSMBConnectionsHandler implements SMBConnectionsHandler, RequestH
     public final void stopHandler() {
 
         // Check if the thread is running
-        if (m_thread != null) {
+        Thread handlerThread = m_thread;
+
+        if (handlerThread != null) {
             m_shutdown = true;
             try {
-                m_thread.interrupt();
+                handlerThread.interrupt();
+
+                if (m_selector != null)
+                    m_selector.wakeup();
             }
             catch (Exception ex) {
             }
 
-            // Stop the idle session reaper thread, if enabled
+            // Stop the idle session reaper thread
             if (m_idleSessReaper != null)
                 m_idleSessReaper.shutdownRequest();
+
+            // Wait for the handler thread to close the listening sockets, so that the ports are free again by the
+            // time the server has shut down. Without this a server that is restarted straight away can fail to
+            // listen on its ports.
+            if (handlerThread != Thread.currentThread()) {
+                boolean interrupted = false;
+                long deadline = System.currentTimeMillis() + StopTimeoutMs;
+                long waitMs = StopTimeoutMs;
+
+                while (waitMs > 0 && handlerThread.isAlive()) {
+                    try {
+                        handlerThread.join(waitMs);
+                    }
+                    catch (InterruptedException ex) {
+                        interrupted = true;
+                    }
+                    waitMs = deadline - System.currentTimeMillis();
+                }
+
+                if (interrupted)
+                    Thread.currentThread().interrupt();
+            }
         }
     }
 

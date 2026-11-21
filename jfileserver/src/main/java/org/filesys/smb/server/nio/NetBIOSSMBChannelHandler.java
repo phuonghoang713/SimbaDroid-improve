@@ -59,18 +59,18 @@ public class NetBIOSSMBChannelHandler extends ChannelPacketHandler {
         // Read the packet header
         int len = readBytes(m_headerBuf, 0, 4);
 
-        // Check if the connection has been closed, read length equals -1
+        // Check if the connection has been closed, read length equals -1, or there is no data available
         if (len <= 0)
             return null;
 
-        // Check if we received a valid NetBIOS header
+        // Short read of the packet header, wait for the rest of it
         if (len < RFCNetBIOSProtocol.HEADER_LEN)
-            throw new IOException("Invalid NetBIOS header, len=" + len);
+            readFully(m_headerBuf, len, RFCNetBIOSProtocol.HEADER_LEN - len);
 
         // Get the packet type from the header
         RFCNetBIOSProtocol.MsgType typ = RFCNetBIOSProtocol.MsgType.fromInt((int) (m_headerBuf[0] & 0xFF));
         int flags = (int) m_headerBuf[1];
-        int dlen = (int) DataPacker.getShort(m_headerBuf, 2);
+        int dlen = ((m_headerBuf[2] & 0xFF) << 8) + (m_headerBuf[3] & 0xFF);
 
         if ((flags & 0x01) != 0)
             dlen += 0x10000;
@@ -79,33 +79,18 @@ public class NetBIOSSMBChannelHandler extends ChannelPacketHandler {
         if (typ == RFCNetBIOSProtocol.MsgType.KEEPALIVE)
             return null;
 
+        // Do not let the client make us allocate more memory than it could have a use for
+        if (dlen > getMaximumPacketSize())
+            throw new IOException("Request too large, " + dlen + " bytes");
+
         // Get a packet from the pool to hold the request data, allow for the NetBIOS header length
         // so that the CIFS request lines up with other implementations.
         SMBSrvPacket pkt = getPacketPool().allocatePacket(dlen + getEncryptionOverhead() + RFCNetBIOSProtocol.HEADER_LEN);
 
         // Read the data part of the packet into the users buffer, this may take several reads
-        int offset = RFCNetBIOSProtocol.HEADER_LEN;
-        int totlen = offset;
-
         try {
-
-            while (dlen > 0) {
-
-                // Read the data
-                len = readBytes(pkt.getBuffer(), offset, dlen);
-
-                // Check if the connection has been closed
-                if (len == -1)
-                    throw new IOException("Connection closed (request read)");
-
-                // Update the received length and remaining data length
-                totlen += len;
-                dlen -= len;
-
-                // Update the user buffer offset as more reads will be required to complete the data read
-                offset += len;
-
-            }
+            if (dlen > 0)
+                readFully(pkt.getBuffer(), RFCNetBIOSProtocol.HEADER_LEN, dlen);
         }
         catch (Throwable ex) {
 
@@ -120,7 +105,7 @@ public class NetBIOSSMBChannelHandler extends ChannelPacketHandler {
         System.arraycopy(m_headerBuf, 0, pkt.getBuffer(), 0, 4);
 
         // Set the received request length
-        pkt.setReceivedLength(totlen);
+        pkt.setReceivedLength(RFCNetBIOSProtocol.HEADER_LEN + dlen);
 
         // Return the received packet
         return pkt;

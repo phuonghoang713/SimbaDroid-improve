@@ -52,6 +52,9 @@ public class JavaNIONetworkFile extends NetworkFile {
     //	End of file flag
     protected boolean m_eof;
 
+    // File size requested by the client that is larger than the current file, applied when the file is closed
+    private long m_pendingSize = -1L;
+
     /**
      * Class constructor.
      *
@@ -123,16 +126,46 @@ public class JavaNIONetworkFile extends NetworkFile {
     public void closeFile() throws IOException {
 
         //  Close the file, if used
-        if (m_io != null) {
+        FileChannel io = null;
+
+        synchronized (this) {
+            io = m_io;
+            m_io = null;
+        }
+
+        if (io != null) {
+
+            //	Apply a pending extend of the file, if the client did not write the data itself
+            IOException extendError = null;
+
+            try {
+                long pendingSize = m_pendingSize;
+                m_pendingSize = -1L;
+
+                if (pendingSize > io.size())
+                    io.write(ByteBuffer.wrap(new byte[1]), pendingSize - 1);
+            }
+            catch (IOException ex) {
+                extendError = new DiskFullException("Failed to extend file, " + getFullName());
+            }
 
             //	Close the file
-            m_io.close();
-            m_io = null;
+            io.close();
+
+            if (extendError != null)
+                throw extendError;
 
             //	Set the last modified date/time for the file
             if (this.isModifyDateDirty()) {
                 long curTime = System.currentTimeMillis();
-                Files.setLastModifiedTime(m_path, FileTime.fromMillis(curTime));
+
+                try {
+                    Files.setLastModifiedTime(m_path, FileTime.fromMillis(curTime));
+                }
+                catch (IOException ex) {
+                    // The file may have been deleted or renamed by another client, the data has still been
+                    // closed successfully so do not fail the close
+                }
                 this.setModifyDate(curTime);
             }
 
@@ -194,8 +227,19 @@ public class JavaNIONetworkFile extends NetworkFile {
      */
     public void openFile(boolean createFlag)
             throws IOException {
+        getChannel();
+    }
 
-        synchronized (m_path) {
+    /**
+     * Return the file channel, opening the file if it is not already open
+     *
+     * @return FileChannel
+     * @exception IOException Failed to open the file
+     */
+    private FileChannel getChannel()
+            throws IOException {
+
+        synchronized (this) {
 
             //	Check if the file is open
             if (m_io == null) {
@@ -211,6 +255,49 @@ public class JavaNIONetworkFile extends NetworkFile {
                 //	Indicate that the file is open
                 setClosed(false);
             }
+
+            return m_io;
+        }
+    }
+
+    @Override
+    public long getPendingFileSize() {
+        return m_pendingSize;
+    }
+
+    /**
+     * Create the file again after it has been removed, used when a large file is truncated by moving the
+     * existing file out of the way rather than freeing its space synchronously.
+     *
+     * @exception IOException Failed to create the file
+     */
+    public void recreateFile()
+            throws IOException {
+
+        synchronized (this) {
+            if (m_io != null) {
+                m_io.close();
+                m_io = null;
+            }
+
+            m_io = FileChannel.open( m_path, EnumSet.of( StandardOpenOption.CREATE, StandardOpenOption.READ,
+                    StandardOpenOption.WRITE));
+
+            m_pendingSize = -1L;
+            setFileSize( 0L);
+            setClosed(false);
+        }
+    }
+
+    /**
+     * Update the path of the file after it has been renamed, so that the file can still be opened and have its
+     * modification time updated via this network file.
+     *
+     * @param path Path
+     */
+    public void updatePath(Path path) {
+        synchronized (this) {
+            m_path = path;
         }
     }
 
@@ -228,16 +315,12 @@ public class JavaNIONetworkFile extends NetworkFile {
             throws IOException {
 
         //  Open the file, if not already open
-        if (m_io == null)
-            openFile(false);
+        FileChannel io = getChannel();
 
-        //	Seek to the required file position
-        if (currentPosition() != fileOff)
-            seekFile(fileOff, SeekType.StartOfFile);
-
-        //  Read from the file
+        //  Read from the file using a positional read. This does not depend on, or change, the channel's file
+        //  position so it is safe when a client has several requests in progress on the same file handle.
         ByteBuffer bytBuf = ByteBuffer.wrap( buf, pos, len);
-        int rdlen = m_io.read( bytBuf);
+        int rdlen = io.read( bytBuf, fileOff);
 
         //	Return the actual length of data read
         return rdlen;
@@ -293,10 +376,7 @@ public class JavaNIONetworkFile extends NetworkFile {
             throws IOException {
 
         //  Open the file, if not already open
-        if (m_io == null)
-            openFile(true);
-        else
-            m_io.force( false);
+        FileChannel io = getChannel();
 
         //	Check if the file length is being truncated or extended
         boolean extendFile = siz > getFileSize() ? true : false;
@@ -304,8 +384,19 @@ public class JavaNIONetworkFile extends NetworkFile {
         //  Set the file length
         try {
 
-            // Set the file to the required length
-            m_io.truncate(siz);
+            // Set the file to the required length. Shrinking the file is done straight away. Extending the file is
+            // deferred until the file is closed, as it can take a very long time on filesystems that do not support
+            // sparse files, such as the FAT variants used on removable storage. Clients usually extend a file before
+            // copying data into it, in which case the file has reached the requested length by the time it is closed
+            // and there is nothing left to do.
+            long curSize = io.size();
+
+            if (siz < curSize) {
+                io.truncate(siz);
+                m_pendingSize = -1L;
+            }
+            else
+                m_pendingSize = siz > curSize ? siz : -1L;
 
             //	Update the file size
             setFileSize(siz);
@@ -364,31 +455,19 @@ public class JavaNIONetworkFile extends NetworkFile {
             throws IOException {
 
         //  Open the file, if not already open
-        if (m_io == null)
-            openFile(true);
-
-        //	We need to seek to the write position. If the write position is off the end of the file
-        //	we must null out the area between the current end of file and the write position.
-        long fileLen = m_io.size();
-
-        if (offset > fileLen) {
-
-            //	Extend the file
-            m_io.truncate(offset + len);
-        }
+        FileChannel io = getChannel();
 
         //	Check for a zero length write
         if (len == 0)
             return;
 
-        //	Seek to the write position
-        m_io.position(offset);
-
-        //  Write to the file
+        //  Write to the file using positional writes, see readFile(). Writing beyond the end of the file extends
+        //  it, the gap is filled with zeroes by the filesystem.
         ByteBuffer bytBuf = ByteBuffer.wrap( buf, pos, len);
+        long wrPos = offset;
 
         while( bytBuf.hasRemaining())
-            m_io.write(bytBuf);
+            wrPos += io.write(bytBuf, wrPos);
 
         //	Update the write count for the file
         incrementWriteCount();
@@ -396,7 +475,9 @@ public class JavaNIONetworkFile extends NetworkFile {
         // Update the current file size if we have written passed the current end of file
         long newLen = offset + len;
 
-        if ( newLen > getFileSize())
-            setFileSize( newLen);
+        synchronized (this) {
+            if ( newLen > getFileSize())
+                setFileSize( newLen);
+        }
     }
 }

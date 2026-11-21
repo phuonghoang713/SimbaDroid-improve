@@ -1747,7 +1747,10 @@ public class SMBV1Parser extends SMBParser {
                                                         // setting to 1 will disable change notify requests from the client
             nt.packWord(SMBV1.MaxVirtualCircuits);      // maximum number of virtual circuits
 
-            int maxBufSize = server.getPacketPool().getLargestSize() - RFCNetBIOSProtocol.HEADER_LEN;
+            // The packet pool may have larger buffers available for use by SMB2/3 clients, do not offer those to
+            // SMB1 clients as the larger sizes do not fit into the SMB1 and NetBIOS length fields
+            int maxBufSize = Math.min(server.getPacketPool().getLargestSize(), SMBSrvSession.DefaultBufferSize)
+                    - RFCNetBIOSProtocol.HEADER_LEN;
             nt.packInt(maxBufSize);
 
             nt.packInt(0); // maximum raw size

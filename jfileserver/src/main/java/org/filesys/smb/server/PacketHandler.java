@@ -44,6 +44,12 @@ public abstract class PacketHandler {
     private SMBPacketPool m_packetPool;
 
     // Encrypted packet overhead, added to allocation size
+    // Maximum size of request to accept from the client. Limits the memory that a client can make the server
+    // allocate before it has logged on.
+    public static final int DefaultMaximumPacketSize = 0x20000;
+
+    private volatile int m_maxPacketSize = DefaultMaximumPacketSize;
+
     private int m_encryptedOverhead;
 
     // Debug output enable
@@ -163,6 +169,25 @@ public abstract class PacketHandler {
      *
      * @return int
      */
+    /**
+     * Return the maximum size of request that will be accepted from the client
+     *
+     * @return int
+     */
+    public final int getMaximumPacketSize() {
+        return m_maxPacketSize;
+    }
+
+    /**
+     * Set the maximum size of request that will be accepted from the client. The protocol handler raises the
+     * limit once the client has negotiated, and logged on with, a protocol that uses larger requests.
+     *
+     * @param maxSize int
+     */
+    public final void setMaximumPacketSize(int maxSize) {
+        m_maxPacketSize = maxSize;
+    }
+
     public final int getEncryptionOverhead() {
         return m_encryptedOverhead;
     }

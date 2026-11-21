@@ -1095,9 +1095,14 @@ public class SMBSrvSession extends SrvSession<SMBSrvSession.Dbg> implements Runn
         }
         catch ( SMBSrvException ex) {
 
-            // Error parsing the negotiate request
-            sendErrorResponseSMB(smbPkt, ex.getNTErrorCode(), ex.getErrorCode(), ex.getErrorClass());
-//            setState(SessionState.SESS_HANGUP);
+            // Return an error response to the client, there was an error parsing the negotiate request. If the
+            // request is too malformed to be able to build an error response then just drop the connection.
+            try {
+                sendErrorResponseSMB(smbPkt, ex.getNTErrorCode(), ex.getErrorCode(), ex.getErrorClass());
+            }
+            catch ( Exception ex2) {
+                setState(SessionState.SESS_HANGUP);
+            }
             return;
         }
 
@@ -1491,7 +1496,7 @@ public class SMBSrvSession extends SrvSession<SMBSrvSession.Dbg> implements Runn
 
 		// Check if there is an active transaction. If there is a post-processor enabled for the
 		// packet then delay ending the transaction until the post-processor has been run
-		if (hasTransaction() && !smbPkt.hasPostProcessor()) {
+		if (hasTransaction() && (smbPkt == null || !smbPkt.hasPostProcessor())) {
 
 			// DEBUG
 			if (Debug.EnableError)

@@ -60,71 +60,30 @@ public class TcpipSMBChannelHandler extends ChannelPacketHandler {
         // Read the packet header
         int len = readBytes(m_headerBuf, 0, 4);
 
-        // Check if the connection has been closed, read length equals -1
-        // equals 0
+        // Check if the connection has been closed, read length equals -1, or there is no data available, read
+        // length equals 0
         if (len <= 0)
             return null;
 
-        // Check if we received a valid header
-        if (len < TcpipSMB.HEADER_LEN) {
+        // Short read of the packet header, can happen under heavy network load. Wait for the rest of it.
+        if (len < TcpipSMB.HEADER_LEN)
+            readFully(m_headerBuf, len, TcpipSMB.HEADER_LEN - len);
 
-            // Short read of the packet header, can happen under heavy network load
-            int pos = len;
+        // Get the data length from the header, a 24 bit value
+        int dlen = ((m_headerBuf[1] & 0xFF) << 16) + ((m_headerBuf[2] & 0xFF) << 8) + (m_headerBuf[3] & 0xFF);
 
-            while ( len < TcpipSMB.HEADER_LEN) {
-
-                // Read more packet header bytes
-                int rxlen = readBytes( m_headerBuf, pos, TcpipSMB.HEADER_LEN - pos);
-
-                // Check if the connection has been closed, read length equals -1
-                if (rxlen == -1)
-                    throw new IOException("Connection closed (header read)");
-
-                // Update the header length
-                len += rxlen;
-                pos += rxlen;
-            }
-        }
-
-        // Get the packet type from the header
-//		int typ = (int) ( m_headerBuf[0] & 0xFF);
-        int dlen = (int) DataPacker.getShort(m_headerBuf, 2);
-
-        // Check for a large packet, add to the data length
-        if (m_headerBuf[1] != 0) {
-            int llen = (int) m_headerBuf[1];
-            dlen += (llen << 16);
-        }
+        // Do not let the client make us allocate more memory than it could have a use for
+        if (dlen > getMaximumPacketSize())
+            throw new IOException("Request too large, " + dlen + " bytes");
 
         // Get a packet from the pool to hold the request data, allow for the NetBIOS header length
         // so that the CIFS request lines up with other implementations.
         SMBSrvPacket pkt = getPacketPool().allocatePacket(dlen + getEncryptionOverhead() + TcpipSMB.HEADER_LEN);
 
-        // Read the data part of the packet into the users buffer, this may take
-        // several reads
-        int offset = RFCNetBIOSProtocol.HEADER_LEN;
-        int totlen = offset;
-
+        // Read the data part of the packet into the users buffer, this may take several reads
         try {
-
-            while (dlen > 0) {
-
-                // Read the data
-                len = readBytes(pkt.getBuffer(), offset, dlen);
-
-                // Check if the connection has been closed
-                if (len == -1)
-                    throw new IOException("Connection closed (request read)");
-
-                // Update the received length and remaining data length
-                totlen += len;
-                dlen -= len;
-
-                // Update the user buffer offset as more reads will be required
-                // to complete the data read
-                offset += len;
-
-            }
+            if (dlen > 0)
+                readFully(pkt.getBuffer(), RFCNetBIOSProtocol.HEADER_LEN, dlen);
         }
         catch (Throwable ex) {
 
@@ -136,7 +95,7 @@ public class TcpipSMBChannelHandler extends ChannelPacketHandler {
         }
 
         // Set the received request length
-        pkt.setReceivedLength(totlen);
+        pkt.setReceivedLength(RFCNetBIOSProtocol.HEADER_LEN + dlen);
 
         // Return the received packet
         return pkt;

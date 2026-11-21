@@ -814,8 +814,12 @@ public class JavaNIODiskDriver implements DiskInterface {
             Files.move( oldPath, newPath, StandardCopyOption.REPLACE_EXISTING);
         }
         catch ( Exception ex) {
-            throw new IOException("Rename " + oldPath + " to " + newPath + " failed");
+            throw new IOException("Rename " + oldPath + " to " + newPath + " failed", ex);
         }
+
+        // Keep the open file, if there is one, in step with the new name
+        if ( netFile instanceof JavaNIONetworkFile)
+            ((JavaNIONetworkFile) netFile).updatePath( newPath);
     }
 
     /**
@@ -984,7 +988,10 @@ public class JavaNIODiskDriver implements DiskInterface {
                 deleteFile( sess, tree, file.getFullName());
 
                 // Create a new zero length file with the original name
-                file.openFile( true);
+                if ( file instanceof JavaNIONetworkFile)
+                    ((JavaNIONetworkFile) file).recreateFile();
+                else
+                    file.openFile( true);
                 return;
             }
         }

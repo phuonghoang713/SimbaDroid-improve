@@ -20,6 +20,8 @@
 
 package org.filesys.server.auth;
 
+import java.net.InetAddress;
+
 import org.filesys.server.SrvSession;
 import org.filesys.server.core.ShareType;
 import org.filesys.server.core.SharedDevice;
@@ -88,6 +90,13 @@ public class LocalAuthenticator extends SMBAuthenticator {
         UserAccount userAcc = getUserDetails(client.getUserName());
         if (userAcc != null) {
 
+            //	Refuse the logon if the client has made too many failed attempts recently
+            LogonThrottle throttle = getSMBConfig() != null ? getSMBConfig().getLogonThrottle() : null;
+            InetAddress clientAddr = sess != null ? sess.getRemoteAddress() : null;
+
+            if (throttle != null && throttle.isBlocked(clientAddr))
+                return AuthStatus.DISALLOW;
+
             //	Validate the password
             boolean authSts = false;
 
@@ -99,6 +108,14 @@ public class LocalAuthenticator extends SMBAuthenticator {
 
                 //	Validate using the ANSI password with the LanMan encryption
                 authSts = validatePassword(userAcc, client, sess.getAuthenticationContext(), PasswordAlgorithm.LANMAN);
+            }
+
+            //	Keep count of failed logons
+            if (throttle != null) {
+                if (authSts)
+                    throttle.recordSuccess(clientAddr);
+                else
+                    throttle.recordFailure(clientAddr);
             }
 
             //	Return the authentication status

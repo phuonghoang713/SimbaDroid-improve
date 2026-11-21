@@ -128,6 +128,15 @@ public class SMBRequestHandler extends RequestHandler implements Runnable {
     }
 
     /**
+     * Return the number of sessions that are waiting to be added to the handler
+     *
+     * @return int
+     */
+    public final int getQueuedSessionCount() {
+        return m_sessQueue.numberOfSessions();
+    }
+
+    /**
      * Check if this request handler has free session slots available
      *
      * @return boolean

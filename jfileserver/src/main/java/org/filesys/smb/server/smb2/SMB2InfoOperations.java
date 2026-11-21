@@ -60,6 +60,9 @@ final class SMB2InfoOperations {
 
     private static final String DEFAULT_FILESYSTEM_NAME = "NTFS";
 
+    // Suffix of the temporary name given to a file while it is being replaced by a rename
+    private static final String REPLACED_SUFFIX = ".~replaced";
+
     // Special values for the timestamps in a set basic information request
     private static final long TIME_NO_CHANGE = 0L;
     private static final long TIME_DONT_UPDATE = -1L;
@@ -789,6 +792,8 @@ final class SMB2InfoOperations {
             throw new SMB2Exception(SMB2.STATUS_OBJECT_PATH_NOT_FOUND);
 
         // Check for an existing file with the new name, unless only the case of the name is being changed
+        String replacedPath = null;
+
         if (!newPath.equalsIgnoreCase(oldPath)) {
             FileStatus targetSts = disk.fileExists(sess, tree, newPath);
 
@@ -798,7 +803,18 @@ final class SMB2InfoOperations {
                 if (targetSts == FileStatus.DirectoryExists || open.isDirectory())
                     throw new SMB2Exception(SMB2.STATUS_ACCESS_DENIED);
 
-                disk.deleteFile(sess, tree, newPath);
+                // Move the file that is being replaced out of the way rather than deleting it first, so that it
+                // can be put back if the rename fails
+                replacedPath = newPath + REPLACED_SUFFIX + Long.toHexString(System.nanoTime());
+
+                try {
+                    disk.renameFile(sess, tree, newPath, replacedPath, null);
+                }
+                catch (IOException ex) {
+                    // Could not be moved aside, fall back to deleting it
+                    replacedPath = null;
+                    disk.deleteFile(sess, tree, newPath);
+                }
             }
         }
 
@@ -806,8 +822,31 @@ final class SMB2InfoOperations {
             disk.renameFile(sess, tree, oldPath, newPath, open.getFile());
         }
         catch (IOException ex) {
+
+            // Restore the file that was to be replaced
+            if (replacedPath != null) {
+                try {
+                    disk.renameFile(sess, tree, replacedPath, newPath, null);
+                }
+                catch (IOException ex2) {
+                    if (m_handler.hasDebug(SMBSrvSession.Dbg.ERROR))
+                        m_handler.debug("Failed to restore " + newPath + " from " + replacedPath + ": " + ex2);
+                }
+            }
+
             int status = SMB2ProtocolHandler.mapException(ex);
             throw new SMB2Exception(status == SMB2.STATUS_UNSUCCESSFUL ? SMB2.STATUS_ACCESS_DENIED : status);
+        }
+
+        // The rename has been done, now the replaced file can go
+        if (replacedPath != null) {
+            try {
+                disk.deleteFile(sess, tree, replacedPath);
+            }
+            catch (IOException ex) {
+                if (m_handler.hasDebug(SMBSrvSession.Dbg.ERROR))
+                    m_handler.debug("Failed to delete replaced file " + replacedPath + ": " + ex);
+            }
         }
 
         open.setPath(newPath);

@@ -28,7 +28,9 @@ public final class ServerSettings {
     private static final String KEY_SMB1_ENABLED = "smb1_enabled";
 
     public static final int MAX_USER_NAME_LENGTH = 32;
-    public static final int MIN_PASSWORD_LENGTH = 6;
+    // The password can be attacked offline by anybody who records a login on the network, so it should not be
+    // too short
+    public static final int MIN_PASSWORD_LENGTH = 8;
     public static final int MAX_PASSWORD_LENGTH = 127;
 
     // Keep to characters that every SMB client can send without quoting problems

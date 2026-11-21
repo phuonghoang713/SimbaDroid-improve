@@ -36,6 +36,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.filesys.debug.Debug;
 import org.filesys.server.auth.ClientInfo;
 import org.filesys.server.auth.ISMBAuthenticator;
+import org.filesys.server.auth.LogonThrottle;
 import org.filesys.server.auth.SMBAuthenticator;
 import org.filesys.server.auth.acl.AccessControl;
 import org.filesys.server.auth.acl.AccessControlManager;
@@ -635,7 +636,13 @@ public class SMB2ProtocolHandler extends ProtocolHandler {
                 break;
             }
 
-            processRequest(req, encSession, chain, out, responses);
+            // A single packet can hold thousands of requests, each of which could ask for a response of the
+            // maximum size. Once the responses have reached the size of one maximum response the remaining
+            // requests of the packet are failed, so that a client cannot make the server build an enormous
+            // response in memory.
+            boolean responseFull = out.position() - HDR > m_maxIoSize + IO_HEADROOM;
+
+            processRequest(req, encSession, chain, out, responses, responseFull);
 
             if (next == 0)
                 break;
@@ -657,8 +664,10 @@ public class SMB2ProtocolHandler extends ProtocolHandler {
      * @param chain      Chain
      * @param out        SMB2Buf
      * @param responses  List of responses built so far
+     * @param reject     boolean true to fail the request without processing it
      */
-    private void processRequest(SMB2Request req, SMB2Session encSession, Chain chain, SMB2Buf out, List<ResponseInfo> responses) {
+    private void processRequest(SMB2Request req, SMB2Session encSession, Chain chain, SMB2Buf out, List<ResponseInfo> responses,
+                                boolean reject) {
 
         int cmd = req.command();
         int status;
@@ -680,6 +689,14 @@ public class SMB2ProtocolHandler extends ProtocolHandler {
                 req.treeId = chain.treeId;
                 req.relatedFileId = chain.fileId;
                 req.chainError = chain.createError;
+            }
+
+            if (reject) {
+                // Identify the session so that the error response can be signed
+                SMB2Session session = m_sessions.get(req.sessionId);
+                if (session != null && session.valid)
+                    req.session = session;
+                throw new SMB2Exception(SMB2.STATUS_INSUFFICIENT_RESOURCES);
             }
 
             status = validateAndDispatch(req, encSession, out);
@@ -1041,6 +1058,16 @@ public class SMB2ProtocolHandler extends ProtocolHandler {
         int tokPos = req.checkRange(tokOff, tokLen);
         byte[] token = Arrays.copyOfRange(req.buffer(), tokPos, tokPos + tokLen);
 
+        // Refuse the logon if the client has made too many failed attempts recently
+        LogonThrottle throttle = m_sess.getSMBServer().getSMBConfiguration().getLogonThrottle();
+        InetAddress clientAddr = m_sess.hasRemoteAddress() ? m_sess.getRemoteAddress() : null;
+
+        if (throttle.isBlocked(clientAddr)) {
+            if (hasDebug(SMBSrvSession.Dbg.NEGOTIATE) || hasDebug(SMBSrvSession.Dbg.ERROR))
+                debug("Logon refused, too many failed logons from " + clientAddr);
+            throw new SMB2Exception(SMB2.STATUS_LOGON_FAILURE);
+        }
+
         // Find or create the session
         SMB2Session session;
 
@@ -1104,9 +1131,17 @@ public class SMB2ProtocolHandler extends ProtocolHandler {
                 return SMB2.STATUS_MORE_PROCESSING_REQUIRED;
 
             case AUTHENTICATED:
+                throttle.recordSuccess(clientAddr);
                 break;
 
             case ANONYMOUS:
+                // If a login is required then anonymous clients do not get a session at all. They would only
+                // be able to use the IPC$ share, but that is enough to list the shares and to reach the remote
+                // procedure call handlers without having authenticated.
+                if (!SMB2Authenticator.isGuestAllowed(auth)) {
+                    failSessionSetup(session, authCtx);
+                    throw new SMB2Exception(SMB2.STATUS_ACCESS_DENIED);
+                }
                 anonymous = true;
                 break;
 
@@ -1118,6 +1153,7 @@ public class SMB2ProtocolHandler extends ProtocolHandler {
                 // Fall through
 
             default:
+                throttle.recordFailure(clientAddr);
                 failSessionSetup(session, authCtx);
                 throw new SMB2Exception(SMB2.STATUS_LOGON_FAILURE);
         }
@@ -1325,8 +1361,9 @@ public class SMB2ProtocolHandler extends ProtocolHandler {
 
         ShareType shareType = shareName.equalsIgnoreCase("IPC$") ? ShareType.ADMINPIPE : ShareType.UNKNOWN;
 
-        // Anonymous sessions may only use the IPC$ share, unless the server is open to guests
-        if (session.anonymous && shareType != ShareType.ADMINPIPE && !SMB2Authenticator.isGuestAllowed(auth))
+        // Anonymous sessions are only created if the server is open to guests, check again in case the
+        // configuration has changed
+        if (session.anonymous && !SMB2Authenticator.isGuestAllowed(auth))
             throw new SMB2Exception(SMB2.STATUS_ACCESS_DENIED);
 
         SharedDevice share = null;

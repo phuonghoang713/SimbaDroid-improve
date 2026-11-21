@@ -51,6 +51,9 @@ public class NIOSMBConnectionsHandler implements SMBConnectionsHandler, RequestH
     // Time to wait for the connections handler thread to release the listening sockets when stopping
     private static final long StopTimeoutMs = 2500L;
 
+    // Maximum number of client connections that are accepted at the same time
+    public static final int MaxConnections = 200;
+
 
     // Constants
     //
@@ -356,6 +359,22 @@ public class NIOSMBConnectionsHandler implements SMBConnectionsHandler, RequestH
     }
 
     /**
+     * Return the number of client connections that are currently open, or waiting to be picked up by a request
+     * handler
+     *
+     * @return int
+     */
+    private int currentConnectionCount() {
+        int count = 0;
+
+        synchronized (m_requestHandlers) {
+            for (SMBRequestHandler reqHandler : m_requestHandlers)
+                count += reqHandler.getCurrentSessionCount() + reqHandler.getQueuedSessionCount();
+        }
+        return count;
+    }
+
+    /**
      * Stop the connections handler
      */
     public final void stopHandler() {
@@ -482,6 +501,22 @@ public class NIOSMBConnectionsHandler implements SMBConnectionsHandler, RequestH
                         // Get the listening server socket, accept the new client connection
                         ServerSocketChannel srvChannel = (ServerSocketChannel) selKey.channel();
                         SocketChannel sockChannel = srvChannel.accept();
+
+                        // Refuse the connection if there are too many already, to protect the server from running
+                        // out of memory and file handles
+                        if (sockChannel != null && currentConnectionCount() >= MaxConnections) {
+                            try {
+                                sockChannel.close();
+                            }
+                            catch (IOException ex) {
+                            }
+
+                            if (Debug.EnableInfo && hasDebug())
+                                Debug.println("[SMB] Too many connections, refused connection");
+
+                            keysIter.remove();
+                            continue;
+                        }
 
                         // Create a packet handler for the new connection
                         ChannelSessionHandler channelHandler = (ChannelSessionHandler) selKey.attachment();

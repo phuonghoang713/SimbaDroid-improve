@@ -26,6 +26,7 @@ import java.util.List;
 import org.filesys.netbios.RFCNetBIOSProtocol;
 import org.filesys.server.auth.SMBAuthenticator;
 import org.filesys.server.auth.ISMBAuthenticator;
+import org.filesys.server.auth.LogonThrottle;
 import org.filesys.smb.Dialect;
 import org.filesys.smb.DialectSelector;
 import org.filesys.smb.ServerType;
@@ -88,6 +89,9 @@ public class SMBConfigSection extends ConfigSection {
     private boolean m_smb2SigningRequired;
     private boolean m_smb3Encryption = true;
     private boolean m_smb3EncryptionRequired;
+
+    // Limits password guessing
+    private final LogonThrottle m_logonThrottle = new LogonThrottle();
 
     //  Authenticator, used to authenticate users and share connections.
     private ISMBAuthenticator m_authenticator;
@@ -858,6 +862,15 @@ public class SMBConfigSection extends ConfigSection {
 
         //  Return the change status
         return sts;
+    }
+
+    /**
+     * Return the logon throttle, which limits the rate at which a client can guess passwords
+     *
+     * @return LogonThrottle
+     */
+    public final LogonThrottle getLogonThrottle() {
+        return m_logonThrottle;
     }
 
     /**

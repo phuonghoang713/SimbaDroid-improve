@@ -432,26 +432,33 @@ public class SmbService extends Service {
         // of power save mode while the screen is off, which otherwise makes the server slow to respond or
         // unreachable. From Android 14 the system maps it to the low latency mode.
         WifiManager wifiMgr = getApplicationContext().getSystemService(WifiManager.class);
-        mWifiLock = wifiMgr.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, tag);
-        mWifiLock.setReferenceCounted(false);
+        // Devices without Wi-Fi, e.g. ones that only have Ethernet, have no Wi-Fi manager
+        if (wifiMgr != null) {
+            mWifiLock = wifiMgr.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, tag);
+            mWifiLock.setReferenceCounted(false);
 
-        // Without a multicast lock many devices filter out the mDNS queries for our host name
-        mMulticastLock = wifiMgr.createMulticastLock(tag);
-        mMulticastLock.setReferenceCounted(false);
+            // Without a multicast lock many devices filter out the mDNS queries for our host name
+            mMulticastLock = wifiMgr.createMulticastLock(tag);
+            mMulticastLock.setReferenceCounted(false);
+        }
     }
 
     @SuppressLint("WakelockTimeout")
     private void acquireLocks() {
         mWakeLock.acquire();
-        mWifiLock.acquire();
-        mMulticastLock.acquire();
+        if (mWifiLock != null) {
+            mWifiLock.acquire();
+        }
+        if (mMulticastLock != null) {
+            mMulticastLock.acquire();
+        }
     }
 
     private void releaseLocks() {
-        if (mMulticastLock.isHeld()) {
+        if (mMulticastLock != null && mMulticastLock.isHeld()) {
             mMulticastLock.release();
         }
-        if (mWifiLock.isHeld()) {
+        if (mWifiLock != null && mWifiLock.isHeld()) {
             mWifiLock.release();
         }
         if (mWakeLock.isHeld()) {
@@ -489,13 +496,23 @@ public class SmbService extends Service {
                     ThreadUtils.postToUiThread(() -> onNetworkAddress(network, address));
                 }
             };
-            connMgr.requestNetwork(
-                    new NetworkRequest.Builder()
-                            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-                            .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
-                            .build(),
-                    mNetCallback
-            );
+            final NetworkRequest request = new NetworkRequest.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                    .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
+                    .build();
+            try {
+                connMgr.requestNetwork(request, mNetCallback);
+            } catch (RuntimeException e) {
+                // The system limits the number of requests per app and can refuse the request for other reasons.
+                // Just watching the networks, without asking for one to be kept up, is the next best thing.
+                Log.w(LOGTAG, "Couldn't request the local network", e);
+                try {
+                    connMgr.registerNetworkCallback(request, mNetCallback);
+                } catch (RuntimeException e2) {
+                    Log.e(LOGTAG, "Couldn't monitor the network", e2);
+                    mNetCallback = null;
+                }
+            }
         }
     }
 
@@ -549,7 +566,11 @@ public class SmbService extends Service {
             mLinkAddress = null;
             mNetwork = null;
             mAvailableNetworks.clear();
-            connMgr.unregisterNetworkCallback(mNetCallback);
+            try {
+                connMgr.unregisterNetworkCallback(mNetCallback);
+            } catch (RuntimeException e) {
+                Log.w(LOGTAG, "Couldn't stop monitoring the network", e);
+            }
             connMgr.bindProcessToNetwork(null);
             mNetCallback = null;
         }

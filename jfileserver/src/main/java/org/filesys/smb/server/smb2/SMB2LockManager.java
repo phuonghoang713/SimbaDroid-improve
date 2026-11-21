@@ -20,10 +20,11 @@
 package org.filesys.smb.server.smb2;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Map;
 
 /**
  * Byte range lock manager for SMB2 opens.
@@ -65,7 +66,14 @@ final class SMB2LockManager {
         }
     }
 
-    private static final ConcurrentHashMap<String, List<Range>> s_locks = new ConcurrentHashMap<String, List<Range>>();
+    // Maximum number of locked ranges on one file
+    private static final int MAX_RANGES_PER_FILE = 1024;
+
+    // Locked ranges by file. All access is synchronised on the map, lock requests are rare compared with reads
+    // and writes, which only look at the count below unless there are locks.
+    private static final Map<String, List<Range>> s_locks = new HashMap<String, List<Range>>();
+
+    private static volatile int s_fileCount;
 
     private SMB2LockManager() {
     }
@@ -80,7 +88,7 @@ final class SMB2LockManager {
      * @return boolean
      */
     static boolean hasLocks() {
-        return !s_locks.isEmpty();
+        return s_fileCount > 0;
     }
 
     /**
@@ -90,33 +98,34 @@ final class SMB2LockManager {
      * @param offset    long
      * @param length    long
      * @param exclusive boolean
-     * @return boolean false if the range conflicts with an existing lock
+     * @return boolean false if the range conflicts with an existing lock, or the file has too many locks
      */
     static boolean lock(SMB2Open open, long offset, long length, boolean exclusive) {
-        if (open.lockKey == null)
-            open.lockKey = keyFor(open);
+        synchronized (s_locks) {
+            if (open.lockKey == null)
+                open.lockKey = keyFor(open);
 
-        List<Range> ranges = s_locks.get(open.lockKey);
-        if (ranges == null) {
-            List<Range> newRanges = new ArrayList<Range>(4);
-            ranges = s_locks.putIfAbsent(open.lockKey, newRanges);
-            if (ranges == null)
-                ranges = newRanges;
-        }
+            List<Range> ranges = s_locks.get(open.lockKey);
 
-        synchronized (ranges) {
-            for (Range range : ranges) {
-                if ((exclusive || range.exclusive) && range.overlaps(offset, length))
+            if (ranges != null) {
+                if (ranges.size() >= MAX_RANGES_PER_FILE)
                     return false;
+
+                for (Range range : ranges) {
+                    if ((exclusive || range.exclusive) && range.overlaps(offset, length))
+                        return false;
+                }
             }
+            else {
+                ranges = new ArrayList<Range>(4);
+                s_locks.put(open.lockKey, ranges);
+                s_fileCount = s_locks.size();
+            }
+
             ranges.add(new Range(offset, length, exclusive, open));
+            open.hasLocks = true;
+            return true;
         }
-
-        // The list may have been removed from the map by a concurrent unlock, make sure it is registered
-        s_locks.putIfAbsent(open.lockKey, ranges);
-
-        open.hasLocks = true;
-        return true;
     }
 
     /**
@@ -128,23 +137,22 @@ final class SMB2LockManager {
      * @return boolean false if the range is not locked by the open
      */
     static boolean unlock(SMB2Open open, long offset, long length) {
-        List<Range> ranges = open.lockKey != null ? s_locks.get(open.lockKey) : null;
-        if (ranges == null)
-            return false;
+        synchronized (s_locks) {
+            List<Range> ranges = open.lockKey != null ? s_locks.get(open.lockKey) : null;
+            if (ranges == null)
+                return false;
 
-        synchronized (ranges) {
             Iterator<Range> iter = ranges.iterator();
             while (iter.hasNext()) {
                 Range range = iter.next();
                 if (range.owner == open && range.offset == offset && range.length == length) {
                     iter.remove();
-                    if (ranges.isEmpty())
-                        s_locks.remove(open.lockKey, ranges);
+                    removeIfEmpty(open.lockKey, ranges);
                     return true;
                 }
             }
+            return false;
         }
-        return false;
     }
 
     /**
@@ -153,20 +161,26 @@ final class SMB2LockManager {
      * @param open SMB2Open
      */
     static void releaseLocks(SMB2Open open) {
-        List<Range> ranges = open.lockKey != null ? s_locks.get(open.lockKey) : null;
-        if (ranges == null)
-            return;
+        synchronized (s_locks) {
+            List<Range> ranges = open.lockKey != null ? s_locks.get(open.lockKey) : null;
 
-        synchronized (ranges) {
-            Iterator<Range> iter = ranges.iterator();
-            while (iter.hasNext()) {
-                if (iter.next().owner == open)
-                    iter.remove();
+            if (ranges != null) {
+                Iterator<Range> iter = ranges.iterator();
+                while (iter.hasNext()) {
+                    if (iter.next().owner == open)
+                        iter.remove();
+                }
+                removeIfEmpty(open.lockKey, ranges);
             }
-            if (ranges.isEmpty())
-                s_locks.remove(open.lockKey, ranges);
+            open.hasLocks = false;
         }
-        open.hasLocks = false;
+    }
+
+    private static void removeIfEmpty(String key, List<Range> ranges) {
+        if (ranges.isEmpty()) {
+            s_locks.remove(key);
+            s_fileCount = s_locks.size();
+        }
     }
 
     /**
@@ -179,16 +193,16 @@ final class SMB2LockManager {
      * @return boolean true if the I/O is allowed
      */
     static boolean canAccess(SMB2Open open, long offset, long length, boolean write) {
-        List<Range> ranges = s_locks.get(open.lockKey != null ? open.lockKey : keyFor(open));
-        if (ranges == null)
-            return true;
+        synchronized (s_locks) {
+            List<Range> ranges = s_locks.get(open.lockKey != null ? open.lockKey : keyFor(open));
+            if (ranges == null)
+                return true;
 
-        synchronized (ranges) {
             for (Range range : ranges) {
                 if (range.owner != open && (write || range.exclusive) && range.overlaps(offset, length))
                     return false;
             }
+            return true;
         }
-        return true;
     }
 }

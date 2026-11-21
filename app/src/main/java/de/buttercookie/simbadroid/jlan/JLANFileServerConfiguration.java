@@ -151,6 +151,11 @@ public class JLANFileServerConfiguration extends ServerConfiguration {
             authenticator.setAllowGuest(true);
         }
         authenticator.setDebug(false);
+
+        // A client that has logged in with the password can sign its messages, which stops anybody else on
+        // the network from tampering with the connection. All SMB2/3 clients support this, so insist on it.
+        // Guest connections have no key to sign with, so this only applies when a login is required.
+        smbConfig.setSMB2SigningRequired(requireLogin);
         authenticator.setAccessMode(ISMBAuthenticator.AuthMode.USER);
         final GenericConfigElement authenticatorConfigElement =
                 new GenericConfigElement("authenticator");

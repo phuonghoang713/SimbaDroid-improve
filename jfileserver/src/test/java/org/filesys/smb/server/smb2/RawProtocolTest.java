@@ -95,6 +95,33 @@ public class RawProtocolTest {
         long i64(int pos) { return ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN).getLong(off + pos); }
     }
 
+    /**
+     * Split a received packet into its chained responses
+     */
+    static List<Msg> parse(byte[] raw) {
+        List<Msg> list = new ArrayList<Msg>();
+        int off = 0;
+        while (true) {
+            ByteBuffer bb = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
+            Msg m = new Msg();
+            m.raw = raw;
+            m.off = off + 64;
+            m.status = bb.getInt(off + 8);
+            m.command = bb.getShort(off + 12) & 0xFFFF;
+            m.credits = bb.getShort(off + 14) & 0xFFFF;
+            m.flags = bb.getInt(off + 16);
+            m.next = bb.getInt(off + 20);
+            m.messageId = bb.getLong(off + 24);
+            m.treeId = bb.getInt(off + 36);
+            m.sessionId = bb.getLong(off + 40);
+            list.add(m);
+            if (m.next == 0)
+                break;
+            off += m.next;
+        }
+        return list;
+    }
+
     static class Client implements AutoCloseable {
         Socket sock;
         DataInputStream in;
@@ -130,28 +157,7 @@ public class RawProtocolTest {
         }
 
         List<Msg> recv() throws IOException {
-            byte[] raw = recvRaw();
-            List<Msg> list = new ArrayList<Msg>();
-            int off = 0;
-            while (true) {
-                ByteBuffer bb = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
-                Msg m = new Msg();
-                m.raw = raw;
-                m.off = off + 64;
-                m.status = bb.getInt(off + 8);
-                m.command = bb.getShort(off + 12) & 0xFFFF;
-                m.credits = bb.getShort(off + 14) & 0xFFFF;
-                m.flags = bb.getInt(off + 16);
-                m.next = bb.getInt(off + 20);
-                m.messageId = bb.getLong(off + 24);
-                m.treeId = bb.getInt(off + 36);
-                m.sessionId = bb.getLong(off + 40);
-                list.add(m);
-                if (m.next == 0)
-                    break;
-                off += m.next;
-            }
-            return list;
+            return parse(recvRaw());
         }
 
         byte[] header(int cmd, int flags, long treeIdVal, long sessId) {

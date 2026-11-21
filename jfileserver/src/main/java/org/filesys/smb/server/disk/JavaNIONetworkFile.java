@@ -55,6 +55,9 @@ public class JavaNIONetworkFile extends NetworkFile {
     // File size requested by the client that is larger than the current file, applied when the file is closed
     private long m_pendingSize = -1L;
 
+    // Set once the file has been closed, so that a request that is still in progress does not open it again
+    private boolean m_released;
+
     /**
      * Class constructor.
      *
@@ -131,6 +134,7 @@ public class JavaNIONetworkFile extends NetworkFile {
         synchronized (this) {
             io = m_io;
             m_io = null;
+            m_released = true;
         }
 
         if (io != null) {
@@ -244,6 +248,11 @@ public class JavaNIONetworkFile extends NetworkFile {
             //	Check if the file is open
             if (m_io == null) {
 
+                //  The data channel is opened when it is first needed. Do not open it again after the file has
+                //  been closed, nothing would ever close it.
+                if (m_released)
+                    throw new IOException("File has been closed, " + getFullName());
+
                 //  Open the file
                 Set<StandardOpenOption> openOptions = null;
                 if ( getGrantedAccess() == Access.READ_WRITE)
@@ -284,6 +293,7 @@ public class JavaNIONetworkFile extends NetworkFile {
                     StandardOpenOption.WRITE));
 
             m_pendingSize = -1L;
+            m_released = false;
             setFileSize( 0L);
             setClosed(false);
         }

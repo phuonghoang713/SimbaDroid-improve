@@ -18,6 +18,7 @@ import org.filesys.server.auth.ClientInfo;
 import org.filesys.server.auth.ISMBAuthenticator;
 import org.filesys.server.auth.LocalAuthenticator;
 import org.filesys.server.auth.SMBAuthenticator;
+import org.filesys.server.auth.UserAccount;
 import org.filesys.server.auth.UserAccountList;
 import org.filesys.server.auth.acl.DefaultAccessControlManager;
 import org.filesys.server.config.CoreServerConfigSection;
@@ -31,6 +32,7 @@ import org.filesys.server.filesys.DiskDeviceContext;
 import org.filesys.server.filesys.DiskInterface;
 import org.filesys.server.filesys.DiskSharedDevice;
 import org.filesys.server.filesys.FilesystemsConfigSection;
+import org.filesys.smb.DialectSelector;
 import org.filesys.smb.server.SMBConfigSection;
 import org.filesys.smb.server.SMBSrvSession;
 import org.springframework.extensions.config.element.GenericConfigElement;
@@ -44,9 +46,10 @@ import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.util.EnumSet;
 import java.util.Enumeration;
-import java.util.List;
 
 import de.buttercookie.simbadroid.BuildConfig;
+import de.buttercookie.simbadroid.service.SmbService;
+import de.buttercookie.simbadroid.settings.ServerSettings;
 import de.buttercookie.simbadroid.util.FileUtils;
 import de.buttercookie.simbadroid.util.SdCard;
 
@@ -54,19 +57,20 @@ public class JLANFileServerConfiguration extends ServerConfiguration {
     private static final int DefaultThreadPoolInit = 6;
     private static final int DefaultThreadPoolMax = 6;
 
-    private static final int[] DefaultMemoryPoolBufSizes = {256, 4096, 16384, 66000};
-    private static final int[] DefaultMemoryPoolInitAlloc = {20, 20, 5, 5};
-    private static final int[] DefaultMemoryPoolMaxAlloc = {100, 50, 50, 50};
+    // The largest buffer size is what allows SMB 2.1 and later clients to read and write in chunks of 1 MB
+    // instead of 64 KB, which makes a big difference to the transfer speed. These large buffers are only
+    // allocated once a client actually uses them.
+    private static final int[] DefaultMemoryPoolBufSizes = {256, 4096, 16384, 66000, 1049600};
+    private static final int[] DefaultMemoryPoolInitAlloc = {20, 20, 5, 5, 0};
+    private static final int[] DefaultMemoryPoolMaxAlloc = {100, 50, 50, 50, 8};
 
-    public JLANFileServerConfiguration(Context context, String hostName)
+    public JLANFileServerConfiguration(Context context, String hostName, ServerSettings settings)
             throws InvalidConfigurationException, DeviceContextException {
         super(hostName);
 
         // Debug
         DebugConfigSection debugConfig = new DebugConfigSection(this);
         final GenericConfigElement debugConfigElement = new GenericConfigElement("output");
-        final GenericConfigElement logLevelConfigElement = new GenericConfigElement("logLevel");
-        logLevelConfigElement.setValue("Debug");
         debugConfig.setDebug("org.filesys.debug.ConsoleDebug", debugConfigElement);
 
         // Core
@@ -86,6 +90,10 @@ public class JLANFileServerConfiguration extends ServerConfiguration {
         accessControlManager.initialize(this, new GenericConfigElement("aclManager"));
         secConfig.setAccessControlManager(accessControlManager);
         final UserAccountList userAccounts = new UserAccountList();
+        final boolean requireLogin = settings.hasCredentials();
+        if (requireLogin) {
+            userAccounts.addUser(new UserAccount(settings.getUserName(), settings.getPassword()));
+        }
         secConfig.setUserAccounts(userAccounts);
 
         // Shares
@@ -108,20 +116,41 @@ public class JLANFileServerConfiguration extends ServerConfiguration {
         smbConfig.setDomainName("WORKGROUP");
         smbConfig.setHostAnnounceInterval(5);
         smbConfig.setHostAnnouncer(true);
-        smbConfig.setNameServerPort(1137);
-        smbConfig.setDatagramPort(1138);
-        smbConfig.setSessionPort(1139);
+        smbConfig.setNameServerPort(SmbService.NETBIOS_NAME_PORT);
+        smbConfig.setDatagramPort(SmbService.NETBIOS_DATAGRAM_PORT);
+        smbConfig.setSessionPort(SmbService.NETBIOS_SESSION_PORT);
         smbConfig.setTcpipSMB(true);
-        smbConfig.setTcpipSMBPort(4450);
-        final SMBAuthenticator authenticator = new LocalAuthenticator() {
-            @Override
-            public AuthStatus authenticateUser(ClientInfo client, SrvSession sess,
-                                               PasswordAlgorithm alg) {
-                return AuthStatus.AUTHENTICATED;
-            }
-        };
+        smbConfig.setTcpipSMBPort(SmbService.SMB_PORT);
+
+        // SMB2 and SMB3 are always available. SMB1 is obsolete and insecure, but some old devices don't support
+        // anything else, so it's up to the user whether to offer it.
+        final DialectSelector dialects = new DialectSelector();
+        if (settings.isSmb1Enabled()) {
+            dialects.enableGroup(DialectSelector.DialectGroup.SMBv1);
+        }
+        dialects.enableGroup(DialectSelector.DialectGroup.SMBv2);
+        dialects.enableGroup(DialectSelector.DialectGroup.SMBv3);
+        smbConfig.setEnabledDialects(dialects);
+
+        final SMBAuthenticator authenticator;
+        if (requireLogin) {
+            // Clients have to log in using the configured account. This also enables SMB2/3 clients to sign
+            // and encrypt the connection, which requires a password that both sides know.
+            authenticator = new LocalAuthenticator();
+            authenticator.setAllowGuest(false);
+        } else {
+            // No credentials configured: let everybody in. SMB1 clients are treated as logged in whatever
+            // they send, SMB2/3 clients get a guest session.
+            authenticator = new LocalAuthenticator() {
+                @Override
+                public AuthStatus authenticateUser(ClientInfo client, SrvSession sess,
+                                                   PasswordAlgorithm alg) {
+                    return AuthStatus.AUTHENTICATED;
+                }
+            };
+            authenticator.setAllowGuest(true);
+        }
         authenticator.setDebug(false);
-        authenticator.setAllowGuest(true);
         authenticator.setAccessMode(ISMBAuthenticator.AuthMode.USER);
         final GenericConfigElement authenticatorConfigElement =
                 new GenericConfigElement("authenticator");
@@ -153,8 +182,10 @@ public class JLANFileServerConfiguration extends ServerConfiguration {
         smbConfig.setNetBIOSBindAddress(bindAddress.getAddress());
 
         String broadcastAddress = getBroadcastAddress(bindAddress);
-        smbConfig.setBroadcastMask(broadcastAddress);
-        NetworkSettings.setBroadcastMask(broadcastAddress);
+        if (broadcastAddress != null) {
+            smbConfig.setBroadcastMask(broadcastAddress);
+            NetworkSettings.setBroadcastMask(broadcastAddress);
+        }
     }
 
     private static String getBroadcastAddress(LinkAddress address) {
@@ -162,7 +193,10 @@ public class JLANFileServerConfiguration extends ServerConfiguration {
         if (address.getAddress() instanceof Inet4Address v4addr) {
             try {
                 InterfaceAddress ifAddr = convertToInterfaceAddress(v4addr);
-                broadcastAddress = ifAddr.getBroadcast().getHostAddress();
+                // Point-to-point links and the like don't have a broadcast address
+                if (ifAddr != null && ifAddr.getBroadcast() != null) {
+                    broadcastAddress = ifAddr.getBroadcast().getHostAddress();
+                }
             } catch (SocketException ignored) {}
         } else if (address.getAddress() instanceof Inet6Address) {
             broadcastAddress = "ff02::1";
@@ -170,11 +204,16 @@ public class JLANFileServerConfiguration extends ServerConfiguration {
         return broadcastAddress;
     }
 
+    @Nullable
     private static InterfaceAddress convertToInterfaceAddress(InetAddress address) throws SocketException {
-        List<InterfaceAddress> interfaceAddresses =
-                NetworkInterface.getByInetAddress(address).getInterfaceAddresses();
-        return interfaceAddresses.stream().reduce((addr1, addr2) ->
-                addr2.getAddress().equals(address) ? addr2 : addr1).get();
+        // The interface might just have gone away again
+        NetworkInterface networkInterface = NetworkInterface.getByInetAddress(address);
+        if (networkInterface == null) {
+            return null;
+        }
+        return networkInterface.getInterfaceAddresses().stream()
+                .filter(addr -> address.equals(addr.getAddress()))
+                .findFirst().orElse(null);
     }
 
     private static void addShare(DiskInterface diskInterface,

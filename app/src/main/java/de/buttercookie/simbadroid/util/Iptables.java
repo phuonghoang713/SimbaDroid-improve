@@ -56,12 +56,34 @@ public class Iptables {
         return cmd;
     }
 
-    public static void iptables(boolean isIPv6, String table, String operation, String rule) {
+    /**
+     * Run an iptables command. Must not be called on the main thread, as starting the root shell and running
+     * commands in it can block for a long time.
+     *
+     * @return Whether the rule is in the requested state afterwards, i.e. present after adding it and no longer
+     * present after removing it.
+     */
+    public static boolean iptables(boolean isIPv6, String table, String operation, String rule) {
         String command = isIPv6 ? "ip6tables" : "iptables";
+        boolean adding = operation.equals("N") || operation.equals("I") || operation.equals("A");
         boolean exists = Shell.cmd(command + " " + waitCmd() + "-t " + table + " -C " + rule).exec().isSuccess();
-        if ((!exists && (operation.equals("N") || operation.equals("I") || operation.equals("A"))) ||
-                (exists && (operation.equals("D") || operation.equals("F") || operation.equals("X")))) {
-            shellCommand(command + " " + waitCmd() + "-t " + table + " -" + operation + " " + rule);
+        if (exists == adding) {
+            // Nothing to do
+            return true;
+        }
+        return shellCommand(command + " " + waitCmd() + "-t " + table + " -" + operation + " " + rule);
+    }
+
+    /**
+     * Check whether a root shell is available. This starts the shell if necessary, which may show the
+     * superuser prompt and can take a long time, so it must not be called on the main thread.
+     */
+    public static boolean hasRoot() {
+        try {
+            return Shell.getShell().isRoot();
+        } catch (Exception e) {
+            Log.i(LOGTAG, "No root shell available", e);
+            return false;
         }
     }
 }

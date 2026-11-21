@@ -65,12 +65,21 @@ import androidx.core.content.ContextCompat;
                 intent.setData(Uri.parse(String.format("package:%s",
                         activity.getApplicationContext().getPackageName())));
                 activity.startActivityForResult(intent,
-                        Permissions.ACTIVITY_MANAGE_STORAGE_RESULT_CODE);
+                        Permissions.ACTIVITY_MANAGE_STORAGE_REQUEST_CODE);
             } catch (Exception e) {
-                Intent intent = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
-                activity.startActivityForResult(intent,
-                        Permissions.ACTIVITY_MANAGE_STORAGE_RESULT_CODE);
+                try {
+                    Intent intent = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
+                    activity.startActivityForResult(intent,
+                            Permissions.ACTIVITY_MANAGE_STORAGE_REQUEST_CODE);
+                } catch (Exception e2) {
+                    // This device has no settings screen for the permission. Report the current state of the
+                    // permission, so that the request doesn't stay pending forever.
+                    Permissions.onManageStorageActivityResult(activity);
+                }
             }
+        } else {
+            // Nothing to ask for, resolve the request with the current state of the permission
+            Permissions.onManageStorageActivityResult(activity);
         }
     }
 }

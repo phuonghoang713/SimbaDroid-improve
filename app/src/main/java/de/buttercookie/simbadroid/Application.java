@@ -12,9 +12,14 @@ import java.security.Security;
 
 public class Application extends android.app.Application {
     static {
-        // Override Android's built-in BC provider with our own dependency
+        // Replace Android's built-in, cut down, BC provider with our own dependency. It is needed for the legacy
+        // algorithms used by SMB1 authentication (MD4, DES) that the platform no longer offers.
+        //
+        // The provider is added at the end of the list, so that the platform's native and hardware accelerated
+        // implementations keep being used for everything else. That matters a lot for the throughput of SMB2/3
+        // signing and encryption (HMAC-SHA256, AES-CMAC, AES-GCM), which runs on every packet.
         Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME);
-        Security.insertProviderAt(new BouncyCastleProvider(), 1);
+        Security.addProvider(new BouncyCastleProvider());
 
         Shell.setDefaultBuilder(Shell.Builder.create()
                 .setFlags(Shell.FLAG_MOUNT_MASTER));

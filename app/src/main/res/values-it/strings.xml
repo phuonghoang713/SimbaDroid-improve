@@ -22,4 +22,23 @@
 
     <string name="status_server_off">SMB server non è attivo.</string>
     <string name="status_server_running">SMB server è in esecuzione.\nPer accedere ai tuoi file, visita <b>%1$s</b>, <b>%2$s</b> o <b>%3$s</b>.</string>
+
+    <string name="status_server_running_ip">SMB server è in esecuzione.\nPer accedere ai tuoi file, visita <b>%1$s</b>.</string>
+    <string name="status_server_running_port">SMB server è in esecuzione.\nIndirizzo: <b>%1$s</b>\nPorta: <b>%2$d</b></string>
+    <string name="status_server_running_name">Nome: <b>%1$s</b></string>
+    <string name="status_port_hint">Questo dispositivo non ha i permessi di root, quindi il server non può usare la porta SMB standard. Inserisci la porta %1$d nel tuo client SMB, ad esempio <b>smb://%2$s:%1$d/Internal</b></string>
+    <string name="status_access_open">Accesso: chiunque in questa rete, senza password.</string>
+    <string name="status_access_login">Accesso: utente <b>%1$s</b> con password.</string>
+
+    <string name="button_settings">Impostazioni</string>
+    <string name="settings_title">Impostazioni del server</string>
+    <string name="settings_login_description">Imposta un nome utente e una password per limitare l\'accesso ai tuoi file. In questo modo i client possono anche firmare e cifrare la connessione, come richiesto dalle versioni recenti di Windows. Lascia entrambi i campi vuoti per consentire la connessione a chiunque nella rete.</string>
+    <string name="settings_user_name">Nome utente</string>
+    <string name="settings_password">Password</string>
+    <string name="settings_smb1">Consenti SMB1</string>
+    <string name="settings_smb1_description">SMB1 è obsoleto e insicuro. Attivalo solo per i vecchi dispositivi che non supportano SMB2 o SMB3.</string>
+    <string name="settings_save">Salva</string>
+    <string name="settings_error_user_name">Usa solo lettere, cifre, punti, trattini e trattini bassi.</string>
+    <string name="settings_error_password">Usa almeno %1$d caratteri.</string>
+    <string name="settings_saved_restart">Riavvia il server per applicare le nuove impostazioni.</string>
 </resources>

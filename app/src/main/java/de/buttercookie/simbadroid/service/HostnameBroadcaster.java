@@ -24,6 +24,7 @@ public class HostnameBroadcaster {
 
     private static JmDNS sJmDNS;
     private static String sHostname;
+    private static InetAddress sAddress;
 
     private HostnameBroadcaster() {}
 
@@ -37,7 +38,9 @@ public class HostnameBroadcaster {
      */
     static void setHostname(@Nullable InetAddress addr, @Nullable String hostname) {
         ThreadUtils.postToBackgroundThread(() -> {
-            if (Objects.equals(sHostname, hostname)) {
+            // The broadcaster is bound to an address, so it also needs restarting when only the address changes
+            if (Objects.equals(sHostname, hostname) &&
+                    (hostname == null || Objects.equals(sAddress, addr))) {
                 return;
             }
 
@@ -59,6 +62,7 @@ public class HostnameBroadcaster {
             }
 
             sHostname = hostname;
+            sAddress = addr;
         });
     }
 }

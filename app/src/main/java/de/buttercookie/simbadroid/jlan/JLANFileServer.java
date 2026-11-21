@@ -14,6 +14,7 @@ import org.filesys.server.NetworkServer;
 import org.filesys.server.config.InvalidConfigurationException;
 import org.filesys.smb.server.SMBServer;
 
+import de.buttercookie.simbadroid.settings.ServerSettings;
 import de.buttercookie.simbadroid.util.ThreadUtils;
 
 public class JLANFileServer {
@@ -21,8 +22,8 @@ public class JLANFileServer {
     private boolean mStarted = false;
     private final Monitor startupMonitor = new Monitor();
 
-    public JLANFileServer(Context context, String hostName) throws Exception {
-        mCfg = new JLANFileServerConfiguration(context, hostName);
+    public JLANFileServer(Context context, String hostName, ServerSettings settings) throws Exception {
+        mCfg = new JLANFileServerConfiguration(context, hostName, settings);
     }
 
     public void start() {

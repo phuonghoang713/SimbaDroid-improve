@@ -10,6 +10,7 @@ import android.system.StructStat;
 import android.util.Log;
 
 import org.filesys.server.core.DeviceContextException;
+import org.filesys.server.filesys.FileSystem;
 import org.filesys.smb.server.disk.JavaNIODeviceContext;
 import org.springframework.extensions.config.ConfigElement;
 
@@ -20,6 +21,16 @@ public class SimbaDiskDeviceContext extends JavaNIODeviceContext {
 
     public SimbaDiskDeviceContext(String name, ConfigElement args) throws DeviceContextException {
         super(name, args);
+    }
+
+    /**
+     * The file system name that is reported to clients. We always claim to be NTFS, the same as Samba does:
+     * what clients really want to know is which features the server supports, and for example Windows refuses
+     * to copy files larger than 4 GB to a share that says it's FAT - even though the limit doesn't apply to us.
+     */
+    @Override
+    public String getFilesystemType() {
+        return FileSystem.TypeNTFS;
     }
 
     @Override

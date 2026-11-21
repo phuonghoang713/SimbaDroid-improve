@@ -16,4 +16,23 @@
     <string name="shortcut_start_server_long">Server starten</string>
     <string name="status_server_off">Der SMB-Server ist nicht aktiv.</string>
     <string name="status_server_running">Der SMB-Server läuft.\nUm auf deine Dateien zuzugreifen, besuche <b>%1$s</b>, <b>%2$s</b> oder <b>%3$s</b>.</string>
+
+    <string name="status_server_running_ip">Der SMB-Server läuft.\nUm auf deine Dateien zuzugreifen, besuche <b>%1$s</b>.</string>
+    <string name="status_server_running_port">Der SMB-Server läuft.\nAdresse: <b>%1$s</b>\nPort: <b>%2$d</b></string>
+    <string name="status_server_running_name">Name: <b>%1$s</b></string>
+    <string name="status_port_hint">Dieses Gerät ist nicht gerootet, daher kann der Server den Standard-SMB-Port nicht verwenden. Gib in deinem SMB-Client den Port %1$d an, zum Beispiel <b>smb://%2$s:%1$d/Internal</b></string>
+    <string name="status_access_open">Zugriff: jeder in diesem Netzwerk, ohne Passwort.</string>
+    <string name="status_access_login">Zugriff: Benutzer <b>%1$s</b> mit Passwort.</string>
+
+    <string name="button_settings">Einstellungen</string>
+    <string name="settings_title">Servereinstellungen</string>
+    <string name="settings_login_description">Lege einen Benutzernamen und ein Passwort fest, um den Zugriff auf deine Dateien zu beschränken. Dadurch können Clients die Verbindung auch signieren und verschlüsseln, was aktuelle Windows-Versionen voraussetzen. Lass beide Felder leer, damit sich jeder im Netzwerk verbinden kann.</string>
+    <string name="settings_user_name">Benutzername</string>
+    <string name="settings_password">Passwort</string>
+    <string name="settings_smb1">SMB1 erlauben</string>
+    <string name="settings_smb1_description">SMB1 ist veraltet und unsicher. Aktiviere es nur für alte Geräte, die weder SMB2 noch SMB3 unterstützen.</string>
+    <string name="settings_save">Speichern</string>
+    <string name="settings_error_user_name">Verwende nur Buchstaben, Ziffern, Punkte, Bindestriche und Unterstriche.</string>
+    <string name="settings_error_password">Verwende mindestens %1$d Zeichen.</string>
+    <string name="settings_saved_restart">Starte den Server neu, um die neuen Einstellungen zu übernehmen.</string>
 </resources>

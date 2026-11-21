@@ -32,8 +32,14 @@ public class SimbaDiskDriver extends JavaNIODiskDriver implements DiskSizeInterf
     private static final int BLOCK_SIZE = 512;
 
     @Override
-    public void getDiskInformation(DiskDeviceContext ctx, SrvDiskInfo diskDev) {
-        StatFs statFs = new StatFs(ctx.getDeviceName());
+    public void getDiskInformation(DiskDeviceContext ctx, SrvDiskInfo diskDev) throws IOException {
+        StatFs statFs;
+        try {
+            statFs = new StatFs(ctx.getDeviceName());
+        } catch (IllegalArgumentException e) {
+            // E.g. the SD card has been removed
+            throw new IOException("Couldn't get file system information for " + ctx.getDeviceName(), e);
+        }
 
         diskDev.setBlockSize(BLOCK_SIZE);
         diskDev.setBlocksPerAllocationUnit(statFs.getBlockSizeLong() / BLOCK_SIZE);
@@ -64,8 +70,14 @@ public class SimbaDiskDriver extends JavaNIODiskDriver implements DiskSizeInterf
         // Because the in-memory file system cache keeps reporting the original last modified date,
         // we need to temporarily set a differing value in order to force-flush the correct time
         // back to the on-disk file system.
-        Files.setLastModifiedTime(newPath, FileTime.fromMillis(lastMod.toMillis() - 42 * 1000));
-        Files.setLastModifiedTime(newPath, lastMod);
+        try {
+            Files.setLastModifiedTime(newPath, FileTime.fromMillis(lastMod.toMillis() - 42 * 1000));
+            Files.setLastModifiedTime(newPath, lastMod);
+        } catch (IOException ex) {
+            // The rename itself has succeeded at this point, so it mustn't be reported as having failed
+            // just because we couldn't fix up the date.
+            Log.d(LOGTAG, "Couldn't restore the last modified date after renaming", ex);
+        }
     }
 
     @Override

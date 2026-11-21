@@ -42,13 +42,17 @@ import org.filesys.smb.TcpipSMB;
 
 import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 
 import de.buttercookie.simbadroid.MainActivity;
 import de.buttercookie.simbadroid.R;
 import de.buttercookie.simbadroid.jlan.JLANFileServer;
 import de.buttercookie.simbadroid.permissions.Permissions;
+import de.buttercookie.simbadroid.settings.ServerSettings;
 import de.buttercookie.simbadroid.util.IpSort;
+import de.buttercookie.simbadroid.util.Iptables;
 import de.buttercookie.simbadroid.util.ThreadUtils;
 
 public class SmbService extends Service {
@@ -61,6 +65,25 @@ public class SmbService extends Service {
     private static final String UNC_PREFIX = "\\\uFEFF\\";
     private static final String MDNS_SUFFIX = ".local";
 
+    /**
+     * The ports that the server listens on. Ports below 1024 can only be opened by root, so the server always
+     * uses unprivileged ports. On rooted devices the standard ports are redirected to them.
+     */
+    public static final int SMB_PORT = 4450;
+    public static final int NETBIOS_NAME_PORT = 1137;
+    public static final int NETBIOS_DATAGRAM_PORT = 1138;
+    public static final int NETBIOS_SESSION_PORT = 1139;
+
+    private static final String[] PORT_REDIRECT_RULES = {
+            "PREROUTING -p tcp --dport 445 -j REDIRECT --to-port " + SMB_PORT,
+            "PREROUTING -p udp --dport 137 -j REDIRECT --to-port " + NETBIOS_NAME_PORT,
+            "PREROUTING -p udp --dport 138 -j REDIRECT --to-port " + NETBIOS_DATAGRAM_PORT,
+            "PREROUTING -p tcp --dport 139 -j REDIRECT --to-port " + NETBIOS_SESSION_PORT,
+    };
+
+    // The DNS-SD service type that SMB clients such as macOS Finder and Linux file managers browse for
+    private static final String NSD_SERVICE_TYPE = "_smb._tcp.";
+
     private final IBinder binder = new SmbBinder();
 
     public class SmbBinder extends Binder {
@@ -70,11 +93,24 @@ public class SmbService extends Service {
     }
 
     private boolean mRunning = false;
+    // The local networks that are currently connected, and our IPv4 address on them (if we have one)
+    private final Map<Network, LinkAddress> mAvailableNetworks = new LinkedHashMap<>();
+    // The network that we are serving on
+    private Network mNetwork = null;
     private LinkAddress mLinkAddress = null;
+    // The address that the server has been started on
+    private LinkAddress mServerAddress = null;
 
     private JLANFileServer mServer;
+    private ServerSettings mSettings;
     private PowerManager.WakeLock mWakeLock;
     private WifiManager.WifiLock mWifiLock;
+    private WifiManager.MulticastLock mMulticastLock;
+
+    // Whether the standard SMB ports are being redirected to our ports, which requires root
+    private boolean mPortRedirectActive = false;
+    // Incremented each time the server is started, to ignore the result of an outdated port redirect setup
+    private int mStartGeneration = 0;
 
     private ConnectivityManager.NetworkCallback mNetCallback;
     private Runnable mNetworkTimeoutRunnable;
@@ -85,8 +121,30 @@ public class SmbService extends Service {
     private static final int INITIAL_SERVICE_NAME_SUFFIX = 1;
     private int mServiceNameSuffix = INITIAL_SERVICE_NAME_SUFFIX;
 
-    public record Status(boolean serviceRunning, boolean serverRunning, String mdnsAddress,
-                         String netBiosAddress, String ipAddress) {
+    /**
+     * @param serviceRunning  The user has started the server.
+     * @param serverRunning   The server is running and reachable, i.e. there is a network connection.
+     * @param mdnsHost        The <code>.local</code> host name of the server, or <code>null</code>.
+     * @param netBiosAddress  The UNC path of the server using its NetBIOS name.
+     * @param ipAddress       The IP address of the server, or an empty string.
+     * @param port            The TCP port that clients need to connect to.
+     * @param standardPort    Whether <code>port</code> is the standard SMB port, so clients don't need to be told
+     *                        about it.
+     * @param userName        The user name that clients need to log in with, or <code>null</code> if the server
+     *                        doesn't require a login.
+     */
+    public record Status(boolean serviceRunning, boolean serverRunning, String mdnsHost,
+                         String netBiosAddress, String ipAddress, int port, boolean standardPort,
+                         String userName) {
+        /** @return The UNC path of the server using its mDNS host name, or <code>null</code>. */
+        public String mdnsAddress() {
+            return mdnsHost != null ? UNC_PREFIX + mdnsHost : null;
+        }
+
+        /** @return The UNC path of the server using its IP address, or an empty string. */
+        public String ipUncAddress() {
+            return !ipAddress.isEmpty() ? UNC_PREFIX + ipAddress : "";
+        }
     }
 
     private void setIsRunning(boolean isRunning) {
@@ -107,9 +165,14 @@ public class SmbService extends Service {
     }
 
     private void setMDNSHostname(String hostname) {
+        ThreadUtils.assertOnUiThread();
         mMDNSHostname = hostname;
         InetAddress addr = mLinkAddress != null ? mLinkAddress.getAddress() : null;
         HostnameBroadcaster.setHostname(addr, hostname);
+    }
+
+    private int getClientPort() {
+        return mPortRedirectActive ? TcpipSMB.PORT : SMB_PORT;
     }
 
     @Override
@@ -134,30 +197,43 @@ public class SmbService extends Service {
             return START_NOT_STICKY;
         }
 
+        Notification notification = getServiceNotification();
         try {
-            mServer = new JLANFileServer(this, getString(R.string.dns_name));
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST);
+        } catch (RuntimeException e) {
+            // Since Android 12 a foreground service can't be started while the app is in the background
+            Log.e(LOGTAG, "Couldn't start the foreground service", e);
+            reportStartupError();
+            return START_NOT_STICKY;
         }
 
-        Notification notification = getServiceNotification();
-        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST);
+        try {
+            mSettings = ServerSettings.load(this);
+            mServer = new JLANFileServer(this, getString(R.string.dns_name), mSettings);
+        } catch (Exception e) {
+            Log.e(LOGTAG, "Couldn't create the SMB server", e);
+            mServer = null;
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE);
+            reportStartupError();
+            return START_NOT_STICKY;
+        }
+
         acquireLocks();
-
-        iptables(false, "nat", "A", "PREROUTING -p tcp --dport 445 -j REDIRECT --to-port 4450");
-        iptables(false, "nat", "A", "PREROUTING -p udp --dport 137 -j REDIRECT --to-port 1137");
-        iptables(false, "nat", "A", "PREROUTING -p udp --dport 138 -j REDIRECT --to-port 1138");
-        iptables(false, "nat", "A", "PREROUTING -p tcp --dport 139 -j REDIRECT --to-port 1139");
-
+        setupPortRedirect();
         setIsRunning(true);
 
         return START_NOT_STICKY;
     }
 
-    private boolean handleAction(Intent intent) {
+    private void reportStartupError() {
+        Toast.makeText(this, R.string.toast_error_starting_server, Toast.LENGTH_SHORT).show();
+        stopSelf();
+    }
+
+    private boolean handleAction(@Nullable Intent intent) {
         boolean handled = false;
-        final String action = intent.getAction();
+        final String action = intent != null ? intent.getAction() : null;
         if (ACTION_STOP.equals(action)) {
             stop();
             handled = true;
@@ -170,20 +246,28 @@ public class SmbService extends Service {
             return;
         }
 
-        setIsRunning(false);
-
-        iptables(false, "nat", "D", "PREROUTING -p tcp --dport 445 -j REDIRECT --to-port 4450");
-        iptables(false, "nat", "D", "PREROUTING -p udp --dport 137 -j REDIRECT --to-port 1137");
-        iptables(false, "nat", "D", "PREROUTING -p udp --dport 138 -j REDIRECT --to-port 1138");
-        iptables(false, "nat", "D", "PREROUTING -p tcp --dport 139 -j REDIRECT --to-port 1139");
+        shutdown();
 
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE);
-        releaseLocks();
         stopSelf();
+    }
+
+    /**
+     * Stop the server and release everything that was acquired for running it.
+     */
+    private void shutdown() {
+        setIsRunning(false);
+        removePortRedirect();
+        releaseLocks();
+        mServer = null;
     }
 
     @Override
     public void onDestroy() {
+        if (mRunning) {
+            // The service is being destroyed without having been stopped first
+            shutdown();
+        }
         unregisterNsdService();
         unmonitorNetwork();
         stopNetworkTimeout();
@@ -199,13 +283,88 @@ public class SmbService extends Service {
         return mLinkAddress != null;
     }
 
+    /**
+     * On rooted devices redirect the standard SMB ports to the ports that the server is listening on.
+     * <p>
+     * Getting a root shell can take a long time, especially if the user has to confirm a superuser prompt
+     * first, so this is done in the background. Until it has finished - and on devices without root - clients
+     * have to use our non-standard port.
+     */
+    private void setupPortRedirect() {
+        final int generation = ++mStartGeneration;
+        ThreadUtils.postToBackgroundThread(() -> {
+            boolean active = false;
+            try {
+                if (Iptables.hasRoot()) {
+                    active = true;
+                    for (String rule : PORT_REDIRECT_RULES) {
+                        // The first rule is the one for the SMB port, which is the one that matters
+                        boolean added = iptables(false, "nat", "A", rule);
+                        if (rule.equals(PORT_REDIRECT_RULES[0])) {
+                            active = added;
+                        }
+                    }
+                }
+            } catch (RuntimeException e) {
+                Log.w(LOGTAG, "Couldn't set up the port redirect", e);
+                active = false;
+            }
+
+            final boolean redirectActive = active;
+            ThreadUtils.postToUiThread(() -> {
+                if (mRunning && generation == mStartGeneration) {
+                    setPortRedirectActive(redirectActive);
+                } else if (redirectActive && !mRunning) {
+                    // The server has been stopped in the meantime. (If it has been started again as well, the
+                    // setup belonging to that start takes care of the rules.)
+                    removePortRedirectRules();
+                }
+            });
+        });
+    }
+
+    private void setPortRedirectActive(boolean active) {
+        if (mPortRedirectActive != active) {
+            mPortRedirectActive = active;
+            // The port that clients need to use has changed
+            if (mNsdRegistrationListener != null) {
+                unregisterNsdService();
+                registerNsdService();
+            }
+            updateUI();
+        }
+    }
+
+    private void removePortRedirect() {
+        // Invalidate a setup that might still be in progress
+        mStartGeneration++;
+        if (mPortRedirectActive) {
+            mPortRedirectActive = false;
+            removePortRedirectRules();
+        }
+    }
+
+    private static void removePortRedirectRules() {
+        ThreadUtils.postToBackgroundThread(() -> {
+            try {
+                for (String rule : PORT_REDIRECT_RULES) {
+                    iptables(false, "nat", "D", rule);
+                }
+            } catch (RuntimeException e) {
+                Log.w(LOGTAG, "Couldn't remove the port redirect", e);
+            }
+        });
+    }
+
     private void updateServerState() {
         ThreadUtils.assertOnUiThread();
         updateUI();
         if (isNetworkAvailable()) {
             stopNetworkTimeout();
-        } else {
+        } else if (mRunning) {
             startNetworkTimeout();
+        } else {
+            stopNetworkTimeout();
         }
 
         if (mServer == null) {
@@ -213,15 +372,32 @@ public class SmbService extends Service {
         }
 
         if (mRunning && isNetworkAvailable()) {
+            if (mServer.running() && !Objects.equals(mServerAddress, mLinkAddress)) {
+                // The server is bound to a specific address, so it needs to be restarted on the new one
+                Log.d(LOGTAG, "Network address changed, restarting SMB server");
+                mServer.stop();
+            }
+
             Log.d(LOGTAG, "Starting SMB server");
-            mServer.setBindAddress(mLinkAddress);
-            mServer.start();
+            try {
+                mServer.setBindAddress(mLinkAddress);
+                mServer.start();
+                mServerAddress = mLinkAddress;
+            } catch (RuntimeException e) {
+                Log.e(LOGTAG, "Couldn't start the SMB server", e);
+                Toast.makeText(this, R.string.toast_error_starting_server, Toast.LENGTH_SHORT).show();
+            }
             getSystemService(NotificationManager.class)
                     .notify(NOTIFICATION_ID, getServiceNotification());
             registerNsdService();
+            if (mMDNSHostname != null) {
+                // Make sure that the host name is advertised on the current address
+                setMDNSHostname(mMDNSHostname);
+            }
         } else {
             Log.d(LOGTAG, "Stopping SMB server");
             mServer.stop();
+            mServerAddress = null;
             if (mRunning && !isNetworkAvailable()) {
                 getSystemService(NotificationManager.class)
                         .notify(NOTIFICATION_ID, getServiceNotification());
@@ -250,20 +426,37 @@ public class SmbService extends Service {
 
         PowerManager pwrMgr = getSystemService(PowerManager.class);
         mWakeLock = pwrMgr.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, tag);
+        mWakeLock.setReferenceCounted(false);
 
-        WifiManager wifiMgr = getSystemService(WifiManager.class);
-        mWifiLock = wifiMgr.createWifiLock(WifiManager.WIFI_MODE_FULL, tag);
+        // WIFI_MODE_FULL has no effect whatsoever since Android 10. The high performance mode keeps Wi-Fi out
+        // of power save mode while the screen is off, which otherwise makes the server slow to respond or
+        // unreachable. From Android 14 the system maps it to the low latency mode.
+        WifiManager wifiMgr = getApplicationContext().getSystemService(WifiManager.class);
+        mWifiLock = wifiMgr.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, tag);
+        mWifiLock.setReferenceCounted(false);
+
+        // Without a multicast lock many devices filter out the mDNS queries for our host name
+        mMulticastLock = wifiMgr.createMulticastLock(tag);
+        mMulticastLock.setReferenceCounted(false);
     }
 
     @SuppressLint("WakelockTimeout")
     private void acquireLocks() {
         mWakeLock.acquire();
         mWifiLock.acquire();
+        mMulticastLock.acquire();
     }
 
     private void releaseLocks() {
-        mWifiLock.release();
-        mWakeLock.release();
+        if (mMulticastLock.isHeld()) {
+            mMulticastLock.release();
+        }
+        if (mWifiLock.isHeld()) {
+            mWifiLock.release();
+        }
+        if (mWakeLock.isHeld()) {
+            mWakeLock.release();
+        }
     }
 
     private void monitorNetwork() {
@@ -272,23 +465,28 @@ public class SmbService extends Service {
             mNetCallback = new ConnectivityManager.NetworkCallback() {
                 @Override
                 public void onAvailable(@NonNull Network network) {
-                    connMgr.bindProcessToNetwork(network);
-                    LinkProperties props = connMgr.getLinkProperties(network);
-                    if (props != null) {
-                        var sortedAddresses = props.getLinkAddresses().stream()
-                                .filter(address -> address.getAddress() instanceof Inet4Address)
-                                .sorted(new IpSort.LinkAddressComparator(false));
-                        ThreadUtils.postToUiThread(() ->
-                                setLinkAddress(sortedAddresses.findFirst().orElse(null)));
-                    } else {
-                        ThreadUtils.postToUiThread(() -> setLinkAddress(null));
-                    }
+                    // The addresses usually arrive via onLinkPropertiesChanged(), but check here as well
+                    onLinkProperties(network, connMgr.getLinkProperties(network));
+                }
+
+                @Override
+                public void onLinkPropertiesChanged(@NonNull Network network,
+                                                    @NonNull LinkProperties linkProperties) {
+                    onLinkProperties(network, linkProperties);
                 }
 
                 @Override
                 public void onLost(@NonNull Network network) {
-                    ThreadUtils.postToUiThread(() -> setLinkAddress(null));
-                    connMgr.bindProcessToNetwork(null);
+                    ThreadUtils.postToUiThread(() -> onNetworkLost(network));
+                }
+
+                private void onLinkProperties(Network network, @Nullable LinkProperties props) {
+                    final LinkAddress address = props == null ? null :
+                            props.getLinkAddresses().stream()
+                                    .filter(addr -> addr.getAddress() instanceof Inet4Address)
+                                    .min(new IpSort.LinkAddressComparator(false))
+                                    .orElse(null);
+                    ThreadUtils.postToUiThread(() -> onNetworkAddress(network, address));
                 }
             };
             connMgr.requestNetwork(
@@ -301,10 +499,56 @@ public class SmbService extends Service {
         }
     }
 
+    private void onNetworkAddress(Network network, @Nullable LinkAddress address) {
+        if (mNetCallback == null) {
+            // No longer monitoring the network
+            return;
+        }
+        mAvailableNetworks.put(network, address);
+        selectNetwork();
+    }
+
+    private void onNetworkLost(Network network) {
+        if (mNetCallback == null) {
+            return;
+        }
+        mAvailableNetworks.remove(network);
+        selectNetwork();
+    }
+
+    /**
+     * Choose the network to serve on. We stay on the current network for as long as we have an address there,
+     * otherwise we switch to another connected network that has one.
+     */
+    private void selectNetwork() {
+        Network network = mNetwork;
+        LinkAddress address = network != null ? mAvailableNetworks.get(network) : null;
+
+        if (address == null) {
+            network = null;
+            for (Map.Entry<Network, LinkAddress> entry : mAvailableNetworks.entrySet()) {
+                if (entry.getValue() != null) {
+                    network = entry.getKey();
+                    address = entry.getValue();
+                    break;
+                }
+            }
+        }
+
+        if (!Objects.equals(network, mNetwork)) {
+            mNetwork = network;
+            // Make sure that our sockets use the local network, even if it doesn't provide internet access
+            getSystemService(ConnectivityManager.class).bindProcessToNetwork(network);
+        }
+        setLinkAddress(address);
+    }
+
     private void unmonitorNetwork() {
         if (mNetCallback != null) {
             ConnectivityManager connMgr = getSystemService(ConnectivityManager.class);
             mLinkAddress = null;
+            mNetwork = null;
+            mAvailableNetworks.clear();
             connMgr.unregisterNetworkCallback(mNetCallback);
             connMgr.bindProcessToNetwork(null);
             mNetCallback = null;
@@ -317,72 +561,96 @@ public class SmbService extends Service {
 
             NsdServiceInfo serviceInfo = new NsdServiceInfo();
             serviceInfo.setServiceName(serviceName);
-            serviceInfo.setServiceType("_microsoft-ds._tcp.");
-            serviceInfo.setPort(TcpipSMB.PORT);
+            serviceInfo.setServiceType(NSD_SERVICE_TYPE);
+            // Advertise the port that clients can actually reach, which is only the standard SMB port if we
+            // were able to redirect it.
+            serviceInfo.setPort(getClientPort());
 
-            mNsdRegistrationListener = new NsdManager.RegistrationListener() {
+            final NsdManager.RegistrationListener listener = new NsdManager.RegistrationListener() {
+                // The callbacks are invoked on a thread of the NSD manager, all our state is handled on the
+                // UI thread.
                 @Override
                 public void onServiceRegistered(NsdServiceInfo serviceInfo) {
-                    // Android auto-increments the service name on detecting a collision, but it
-                    // does so by appending a " (<digit>)" suffix (i.e. including a space) to the
-                    // service name, making the resulting name not plain-DNS-friendly.
-                    if (!serviceName.equals(serviceInfo.getServiceName())) {
-                        // We couldn't get our preferred service name, so try again with a suffix
-                        ThreadUtils.postToUiThread(() -> {
+                    final String registeredName = serviceInfo.getServiceName();
+                    ThreadUtils.postToUiThread(() -> {
+                        if (mNsdRegistrationListener != this) {
+                            // Already unregistered again
+                            return;
+                        }
+                        // Android auto-increments the service name on detecting a collision, but it
+                        // does so by appending a " (<digit>)" suffix (i.e. including a space) to the
+                        // service name, making the resulting name not plain-DNS-friendly.
+                        if (!serviceName.equals(registeredName)) {
+                            // We couldn't get our preferred service name, so try again with a suffix
                             mServiceNameSuffix++;
                             unregisterNsdService();
                             registerNsdService();
-                        });
-                    } else {
-                        setMDNSHostname(serviceName);
-                        updateUI();
-                    }
+                        } else {
+                            setMDNSHostname(serviceName);
+                            updateUI();
+                        }
+                    });
                 }
 
                 @Override
                 public void onRegistrationFailed(NsdServiceInfo serviceInfo, int errorCode) {
-                    setMDNSHostname(null);
-                    updateUI();
+                    clearHostname();
                 }
 
                 @Override
                 public void onServiceUnregistered(NsdServiceInfo serviceInfo) {
-                    setMDNSHostname(null);
-                    updateUI();
+                    clearHostname();
                 }
 
                 @Override
                 public void onUnregistrationFailed(NsdServiceInfo serviceInfo, int errorCode) {
-                    setMDNSHostname(null);
-                    updateUI();
+                    clearHostname();
+                }
+
+                private void clearHostname() {
+                    ThreadUtils.postToUiThread(() -> {
+                        // Ignore callbacks of a registration that has been replaced by a new one
+                        if (mNsdRegistrationListener == null || mNsdRegistrationListener == this) {
+                            setMDNSHostname(null);
+                            updateUI();
+                        }
+                    });
                 }
             };
+            mNsdRegistrationListener = listener;
 
-            NsdManager nsdManager = getSystemService(NsdManager.class);
-            nsdManager.registerService(
-                    serviceInfo, NsdManager.PROTOCOL_DNS_SD, mNsdRegistrationListener);
+            try {
+                NsdManager nsdManager = getSystemService(NsdManager.class);
+                nsdManager.registerService(
+                        serviceInfo, NsdManager.PROTOCOL_DNS_SD, listener);
+            } catch (RuntimeException e) {
+                Log.w(LOGTAG, "Couldn't register the mDNS service", e);
+                mNsdRegistrationListener = null;
+            }
         }
     }
 
     private void unregisterNsdService() {
         if (mNsdRegistrationListener != null) {
-            NsdManager nsdManager = getSystemService(NsdManager.class);
-            nsdManager.unregisterService(mNsdRegistrationListener);
+            NsdManager.RegistrationListener listener = mNsdRegistrationListener;
             mNsdRegistrationListener = null;
+            try {
+                NsdManager nsdManager = getSystemService(NsdManager.class);
+                nsdManager.unregisterService(listener);
+            } catch (RuntimeException e) {
+                Log.w(LOGTAG, "Couldn't unregister the mDNS service", e);
+            }
+            setMDNSHostname(null);
         }
     }
 
     private String getNsdServiceName(int suffix) {
         StringBuilder sb = new StringBuilder(getString(R.string.dns_name));
-        if (mServiceNameSuffix > INITIAL_SERVICE_NAME_SUFFIX) {
+        if (suffix > INITIAL_SERVICE_NAME_SUFFIX) {
             sb.append("-");
             sb.append(suffix);
         }
         return sb.toString();
-    }
-
-    private String getUNCFormattedMDNSAddress() {
-        return mMDNSHostname != null ? UNC_PREFIX + mMDNSHostname + MDNS_SUFFIX : null;
     }
 
     private void createNotificationChannel() {
@@ -402,16 +670,18 @@ public class SmbService extends Service {
         Intent activityIntent = new Intent(this, MainActivity.class);
         PendingIntent pendingIntent = PendingIntent.getActivity(getApplicationContext(), 0,
                 activityIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        NotificationCompat.Action stopAction = getStopAction();
-        return new NotificationCompat.Builder(this, NOTIFICATION_CHANNEL)
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, NOTIFICATION_CHANNEL)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle(getString(R.string.app_name))
                 .setContentText(getServiceNotificationText())
                 .setContentIntent(pendingIntent)
-                .addAction(stopAction)
                 .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-                .setOngoing(true)
-                .build();
+                .setOngoing(true);
+        NotificationCompat.Action stopAction = getStopAction();
+        if (stopAction != null) {
+            builder.addAction(stopAction);
+        }
+        return builder.build();
     }
 
     private @Nullable NotificationCompat.Action getStopAction() {
@@ -443,7 +713,9 @@ public class SmbService extends Service {
      */
     @SuppressLint("InlinedApi")
     public static void startService(final Context context, final boolean promptForPermissions) {
-        Intent intent = new Intent(context, SmbService.class);
+        // Don't hold on to an activity for longer than necessary
+        final Context appContext = context.getApplicationContext();
+        Intent intent = new Intent(appContext, SmbService.class);
 
         var notifPerm = Permissions.from(context);
         if (!promptForPermissions) {
@@ -460,25 +732,43 @@ public class SmbService extends Service {
                         storagePerm.doNotPrompt();
                     }
                     storagePerm.withPermissions(storagePermission)
-                            .andFallback(() -> Toast.makeText(context,
+                            .andFallback(() -> Toast.makeText(appContext,
                                     R.string.toast_need_storage_permission,
                                     Toast.LENGTH_SHORT).show())
-                            .run(() -> context.startService(intent));
+                            .run(() -> launchService(appContext, intent));
                 }));
+    }
+
+    private static void launchService(Context appContext, Intent intent) {
+        try {
+            appContext.startService(intent);
+        } catch (RuntimeException e) {
+            // E.g. the app has gone into the background while the permission prompts were showing
+            Log.e(LOGTAG, "Couldn't start the service", e);
+            Toast.makeText(appContext, R.string.toast_error_starting_server,
+                    Toast.LENGTH_SHORT).show();
+        }
     }
 
     private void updateUI() {
         boolean serverStarted = mServer != null && mServer.running();
         String netBiosAddress = UNC_PREFIX + getString(R.string.dns_name);
         String textualIp = mLinkAddress != null ?
-                UNC_PREFIX + mLinkAddress.getAddress().getHostAddress() : "";
+                mLinkAddress.getAddress().getHostAddress() : "";
+        String mdnsHost = mMDNSHostname != null ? mMDNSHostname + MDNS_SUFFIX : null;
+        String userName = mRunning && mSettings != null && mSettings.hasCredentials() ?
+                mSettings.getUserName() : null;
 
-        Status status = new Status(mRunning, serverStarted,
-                getUNCFormattedMDNSAddress(), netBiosAddress, textualIp);
+        Status status = new Status(mRunning, serverStarted, mdnsHost, netBiosAddress, textualIp,
+                getClientPort(), mPortRedirectActive, userName);
 
         var liveData = SmbServiceStatusLiveData.get();
         if (!status.equals(liveData.getValue())) {
-            liveData.postValue(status);
+            if (ThreadUtils.isOnUiThread()) {
+                liveData.setValue(status);
+            } else {
+                liveData.postValue(status);
+            }
         }
     }
 }

@@ -28,3 +28,5 @@
 -keep class org.bouncycastle.jcajce.provider.digest.MD4** { *; }
 # more JLANFileServer classes that need to be kept
 -keep class org.filesys.smb.server.*Handler { *; }
+# The SMB2/3 protocol handler is instantiated via reflection by the protocol factory
+-keep class org.filesys.smb.server.smb2.SMB2ProtocolHandler { <init>(); }

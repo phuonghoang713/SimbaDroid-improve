@@ -82,6 +82,13 @@ public class SMBConfigSection extends ConfigSection {
     //  Default SMB dialects to enable
     private DialectSelector m_dialects;
 
+    // SMB2/SMB3 security options
+    //
+    // Require clients to sign requests, offer SMB3 encryption to clients, and require SMB3 encryption
+    private boolean m_smb2SigningRequired;
+    private boolean m_smb3Encryption = true;
+    private boolean m_smb3EncryptionRequired;
+
     //  Authenticator, used to authenticate users and share connections.
     private ISMBAuthenticator m_authenticator;
     private ConfigElement m_authParams;
@@ -851,6 +858,62 @@ public class SMBConfigSection extends ConfigSection {
 
         //  Return the change status
         return sts;
+    }
+
+    /**
+     * Check if SMB2/SMB3 clients are required to sign their requests. Signing requires an authenticated logon, so
+     * it is not enforced for guest and anonymous sessions.
+     *
+     * @return boolean
+     */
+    public final boolean isSMB2SigningRequired() {
+        return m_smb2SigningRequired;
+    }
+
+    /**
+     * Set whether SMB2/SMB3 clients are required to sign their requests
+     *
+     * @param required boolean
+     */
+    public final void setSMB2SigningRequired(boolean required) {
+        m_smb2SigningRequired = required;
+    }
+
+    /**
+     * Check if SMB3 encryption is offered to clients
+     *
+     * @return boolean
+     */
+    public final boolean hasSMB3Encryption() {
+        return m_smb3Encryption;
+    }
+
+    /**
+     * Enable/disable offering SMB3 encryption to clients
+     *
+     * @param ena boolean
+     */
+    public final void setSMB3Encryption(boolean ena) {
+        m_smb3Encryption = ena;
+    }
+
+    /**
+     * Check if SMB3 encryption is required. If enabled only authenticated SMB3 clients that support encryption can
+     * connect, guest and anonymous logons are rejected.
+     *
+     * @return boolean
+     */
+    public final boolean isSMB3EncryptionRequired() {
+        return m_smb3Encryption && m_smb3EncryptionRequired;
+    }
+
+    /**
+     * Set whether SMB3 encryption is required
+     *
+     * @param required boolean
+     */
+    public final void setSMB3EncryptionRequired(boolean required) {
+        m_smb3EncryptionRequired = required;
     }
 
     /**

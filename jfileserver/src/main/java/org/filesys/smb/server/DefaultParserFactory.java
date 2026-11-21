@@ -19,6 +19,7 @@ package org.filesys.smb.server;
 
 import org.filesys.smb.Dialect;
 import org.filesys.smb.DialectSelector;
+import org.filesys.smb.server.smb2.SMBV2Parser;
 
 /**
  * Default Parser Factpry Class
@@ -44,9 +45,13 @@ public class DefaultParserFactory implements ParserFactory {
     public SMBParser createParser( SMBSrvPacket.Version smbVer, byte[] buf, int len)
         throws UnsupportedSMBVersionException {
 
-        // Create an SMB v1 parser, or throw an exception
+        // Create an SMB v1 parser
         if ( smbVer == SMBSrvPacket.Version.V1)
             return new SMBV1Parser(buf, len);
+
+        // SMB v2 and v3 share a common packet format
+        if ( smbVer == SMBSrvPacket.Version.V2 || smbVer == SMBSrvPacket.Version.V3)
+            return new SMBV2Parser(buf, len);
 
         throw new UnsupportedSMBVersionException();
     }
@@ -67,6 +72,6 @@ public class DefaultParserFactory implements ParserFactory {
 
         // Setup the supported set of SMB dialects
         _supportedDialects = new DialectSelector();
-        _supportedDialects.enableUpTo(Dialect.UpToSMBv1);
+        _supportedDialects.enableUpTo(Dialect.UpToSMBv3);
     }
 }

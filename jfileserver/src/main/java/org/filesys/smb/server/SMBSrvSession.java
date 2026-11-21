@@ -1108,6 +1108,15 @@ public class SMBSrvSession extends SrvSession<SMBSrvSession.Dbg> implements Runn
 
         // Find the highest level SMB dialect that the server and client both support
 		DialectSelector diaSelector = getSMBServer().getSMBConfiguration().getEnabledDialects();
+
+		// The SMB2 wildcard dialect is offered by clients that send an SMB1 multi-protocol negotiate request, it is
+		// available if any of the SMB2/3 dialects are enabled. The client then negotiates the actual dialect using
+		// an SMB2 negotiate request.
+		if (( diaSelector.hasSMB2() || diaSelector.hasSMB3()) && diaSelector.hasDialect( Dialect.SMB2_Any) == false) {
+			diaSelector = new DialectSelector( diaSelector);
+			diaSelector.AddDialect( Dialect.SMB2_Any);
+		}
+
 		int diaIdx = negCtx.findHighestDialect( diaSelector);
 
 		// Debug
@@ -1190,8 +1199,10 @@ public class SMBSrvSession extends SrvSession<SMBSrvSession.Dbg> implements Runn
 			if ( diaIdx != -1) {
 				setState(respPkt.getParser().nextStateForDialect(diaIdx));
 
-				// If a dialect was selected inform the server that the session has been opened
-				getSMBServer().sessionOpened(this);
+				// If a dialect was selected inform the server that the session has been opened, unless the client
+				// is going to send a second negotiate request to select the SMB2/3 dialect
+				if ( getState() != SessionState.SMB_NEGOTIATE)
+					getSMBServer().sessionOpened(this);
 			}
         }
         catch (AuthenticatorException ex) {

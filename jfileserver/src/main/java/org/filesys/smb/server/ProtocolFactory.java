@@ -21,6 +21,7 @@
 package org.filesys.smb.server;
 
 import org.filesys.smb.Dialect;
+import org.filesys.smb.server.smb2.SMB2ProtocolHandler;
 
 import java.util.HashMap;
 
@@ -121,5 +122,15 @@ public class ProtocolFactory {
 
         // Add the SMB v1 NT handler
         ProtocolFactory.addHandlerClass( Dialect.NT, NTProtocolHandler.class);
+
+        // SMB2 and SMB3 dialects, the wildcard dialect is used to respond to SMB1 multi-protocol negotiate requests
+        handlerClass = SMB2ProtocolHandler.class;
+
+        ProtocolFactory.addHandlerClass( Dialect.SMB2_202, handlerClass);
+        ProtocolFactory.addHandlerClass( Dialect.SMB2_210, handlerClass);
+        ProtocolFactory.addHandlerClass( Dialect.SMB2_Any, handlerClass);
+        ProtocolFactory.addHandlerClass( Dialect.SMB3_300, handlerClass);
+        ProtocolFactory.addHandlerClass( Dialect.SMB3_302, handlerClass);
+        ProtocolFactory.addHandlerClass( Dialect.SMB3_311, handlerClass);
     }
 }

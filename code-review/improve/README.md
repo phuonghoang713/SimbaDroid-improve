@@ -10,6 +10,7 @@ are in [../round-1.md](../round-1.md).
 | [android-10-plus.md](android-10-plus.md) | Behaviour on Android 10 and later. |
 | [app-fixes.md](app-fixes.md) | The other changes to the Android app. |
 | [library-fixes.md](library-fixes.md) | Bugs fixed in the file server library. |
+| [round-2.md](round-2.md) | The risk fixes of the second review round: memory limits, password guessing, signing, safe rename. |
 
 ## In one paragraph
 

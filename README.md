@@ -56,8 +56,10 @@ Shares for the internal storage (*"Internal"*) as well as an external SD card (*
 are set up automatically.
 
 By default they are accessible **without authentication**, so be careful about using this app in public networks.
-In the *Settings* you can set a user name and password. Clients then have to log in, and can sign and encrypt the
-connection. Current Windows versions (Windows 11 24H2 and later) no longer connect to servers without a login
+In the *Settings* you can set a user name and password (at least eight characters). Clients then have to log
+in, their messages are signed so that nobody can tamper with them, and they can ask for encryption. Repeated wrong
+passwords from one computer are answered with a short lockout. If you set a password, also switch off SMB1 unless
+you need it: its logon is much weaker. Current Windows versions (Windows 11 24H2 and later) no longer connect to servers without a login
 unless you relax their security settings, so for those you will want to set credentials.
 
 `READ/WRITE/MANAGE_EXTERNAL_STORAGE` is required for filesystem access.

@@ -87,7 +87,8 @@ user name if a login is required. `MainActivity` turns that into the button stat
 | SMB | Server name, ports, enabled dialects (SMB2 and SMB3 always, SMB1 if allowed), authenticator. |
 
 Authenticator: without credentials a `LocalAuthenticator` that accepts everybody (SMB1) and allows guests (SMB2/3);
-with credentials a plain `LocalAuthenticator` that checks the password and refuses guests.
+with credentials a plain `LocalAuthenticator` that checks the password and refuses guests and anonymous clients,
+and SMB2/3 clients are required to sign their messages.
 
 ## The filesystem driver
 

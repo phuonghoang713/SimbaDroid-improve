@@ -5,6 +5,7 @@ This folder records the review of the SimbaDroid code base and what was done abo
 | File | Content |
 | --- | --- |
 | [round-1.md](round-1.md) | The findings of the review: every problem that was found, how serious it is and whether it has been fixed. |
+| [round-2.md](round-2.md) | A second pass that looked only for risks: what an attacker could do, what could lose data, what could crash. |
 | [verification.md](verification.md) | How the changes were tested, with the results - and, just as important, what could **not** be tested. |
 | [improve/](improve/README.md) | What was changed as a result: one page per topic, written for someone who wants to know what is different now and why. |
 
@@ -33,6 +34,8 @@ Everything in the repository was read:
 
 ## Summary of the findings
 
+Round 1:
+
 | Severity | Found | Fixed | Left open |
 | --- | --- | --- | --- |
 | High | 7 | 7 | 0 |
@@ -40,4 +43,15 @@ Everything in the repository was read:
 | Low | 14 | 12 | 2 |
 | Informational | 5 | 4 | 1 |
 
-The items that were left open are listed at the end of [round-1.md](round-1.md) together with the reason.
+Round 2 (risks):
+
+| Severity | Found | Fixed |
+| --- | --- | --- |
+| High | 1 | 1 |
+| Medium | 6 | 6 |
+| Low | 3 | 3 |
+
+plus six risks that were looked at and deliberately accepted.
+
+The items that were left open or accepted are listed at the end of [round-1.md](round-1.md) and
+[round-2.md](round-2.md) together with the reason.

@@ -53,7 +53,8 @@ These are deliberate omissions; none of them stops a client from working, client
 SMB2/3 signing and encryption need a secret that both sides know, which is the password. The app therefore has a
 small settings dialog:
 
-* **User name and password.** If set, clients must log in with them, and signing/encryption become available.
+* **User name and password.** If set, clients must log in with them, signing is required and encryption becomes
+  available.
   If empty, anyone on the network can connect (as before), as a guest. Windows 11 24H2 and later refuse guest
   logons by default, so for those you need to set credentials.
 * **Allow SMB1.** On by default, so that nothing that worked before stops working. Turn it off unless you have a

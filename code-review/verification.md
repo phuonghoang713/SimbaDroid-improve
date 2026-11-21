@@ -30,7 +30,7 @@ The library can run on a desktop JVM, so the server was tested there. The tests 
 Each test starts a real server on a free local port, sharing a temporary folder, using the same configuration
 that the app builds (minus the Android specific parts).
 
-Result of the last run: **62 tests, 0 failures**.
+Result of the last run: **72 tests, 0 failures**.
 
 | Test class | Tests | What it covers |
 | --- | --- | --- |
@@ -41,6 +41,8 @@ Result of the last run: **62 tests, 0 failures**.
 | `JcifsInteropTest` | 6 | File operations with the *jcifs-ng* client for SMB1 and all SMB2/3 dialects, as guest and authenticated, with signing enforced. This is the regression test for SMB1. |
 | `RawProtocolTest` | 4 | Hand-built messages: compounded requests (related and unrelated, including a failed create), upgrade from an SMB1 negotiate, about 20 error cases, and 1,500 randomly corrupted requests after which the server must still answer. |
 | `ServerLifecycleTest` | 2 | Stopping and restarting the server 15 times in a row on the same port, and restarting with a client connected and a file open. |
+| `SecurityTest` | 6 | Round 2: password guessing is throttled but a few mistakes do not lock the user out; anonymous and unknown users are refused when a login is required; a packet with 400 read requests gets a bounded response; connections over the limit are refused and the server recovers. |
+| `LogonThrottleTest` | 4 | The throttle on its own: lockout, recovery, per client counting, bounded memory. |
 
 Why two client libraries: they are independent implementations, so the server is not just being tested against my
 own reading of the protocol. smbj and jcifs-ng are also what many Android file managers are built on.

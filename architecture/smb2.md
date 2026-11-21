@@ -74,7 +74,7 @@ Handled by the existing `SMBSrvSession.procSMBNegotiate()`:
 | --- | --- |
 | Large requests | Offered from SMB 2.1 on a direct TCP connection. Maximum read/write size 1 MB if the packet pool has buffers that big, otherwise 64 KB. |
 | Cipher | SMB 3.1.1: AES-128-GCM if the client offers it, otherwise AES-128-CCM. SMB 3.0/3.0.2: AES-128-CCM. |
-| Signing | Always enabled; required only if configured. |
+| Signing | Always enabled; required if configured. The app requires it whenever a login is configured. |
 | Security token | An SPNEGO token offering NTLMSSP. |
 
 For SMB 3.1.1 the handler also starts the *pre-authentication integrity hash*: a SHA-512 hash chained over the
@@ -105,7 +105,8 @@ What `SMB2ProtocolHandler` does with the outcome:
 | Authenticated | - | Session with keys. Signing and encryption are possible. |
 | Unknown user | yes | Guest session, no keys. |
 | Unknown user | no | Logon failure. |
-| Anonymous | - | Anonymous session, no keys. May only use `IPC$` unless guests are allowed. |
+| Anonymous | yes | Anonymous session, no keys. |
+| Anonymous | no | Refused. |
 | Wrong password | - | Logon failure. |
 
 A guest or anonymous session has no key, so its messages cannot be signed or encrypted. Clients that insist on
@@ -153,7 +154,8 @@ for folders the state of the listing. It refers to the library's `NetworkFile`. 
 * **Folder listings** keep a `SearchContext` in the open. An entry that does not fit into the response is kept for
   the next one. The context is closed as soon as the listing is complete, to release the folder handle.
 * **Delete** is "delete on close": the flag is set on the open file, and the driver deletes when it closes.
-* **Rename** deletes an existing target only if the client asked to replace it.
+* **Rename** replaces an existing target only if the client asked for that. The target is moved aside first and
+  put back if the rename fails.
 * **Locks** are kept in memory by `SMB2LockManager`, shared by all connections. A conflicting request fails
   immediately.
 
@@ -170,9 +172,13 @@ A change notification request cannot be answered at once. The handler sends an i
 | Request size before logon | 128 KB |
 | Read/write size | 1 MB (64 KB for SMB 2.0.2 and NetBIOS connections) |
 | Credits per connection | 8192 |
+| Connections | 200 |
+| Failed logons per client address | 20, then refused for a minute |
+| Response to one packet | about one maximum sized response; further requests in the packet are refused |
 | Sessions per connection | 32 |
 | Pending requests per connection | 64 |
 | Locks per request | 64 |
+| Locked ranges per file | 1024 |
 
 ## Not implemented
 

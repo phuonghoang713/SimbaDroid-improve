@@ -22,9 +22,11 @@ As required by the licence, the changes made to the original are stated here.
   `SMBSrvSession`, `SMBConfigSection`) and to fix bugs (`JavaNIONetworkFile`, `JavaNIODiskDriver`,
   `JavaNIOSearchContext`, `NIOSMBConnectionsHandler`, `ChannelPacketHandler`, `TcpipSMBChannelHandler`,
   `NetBIOSSMBChannelHandler`, `PacketHandler`, `SMBServer`, `SMBV1Parser`, `NetworkFile`, `ByteBufferPool`,
-  `AuthType`).
+  `AuthType`) and to reduce risks (`LocalAuthenticator`, `SMBRequestHandler`; new class
+  `org.filesys.server.auth.LogonThrottle`).
 
-The reasons for each change are in [../code-review/improve/library-fixes.md](../code-review/improve/library-fixes.md),
+The reasons for each change are in [../code-review/improve/library-fixes.md](../code-review/improve/library-fixes.md)
+and [../code-review/improve/round-2.md](../code-review/improve/round-2.md),
 and the design of the SMB2/SMB3 code in [../architecture/smb2.md](../architecture/smb2.md).
 
 ## Building and testing

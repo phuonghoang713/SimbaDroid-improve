@@ -1,0 +1,5 @@
+- Unterstützung für SMB2 und SMB3, einschließlich Signierung und Verschlüsselung
+- Optionaler Benutzername und Passwort zur Zugriffsbeschränkung
+- Anzeige von Adresse und Port für Geräte ohne Root
+- Behebt: Server startete nach Erteilen von „Zugriff auf alle Dateien“ unter Android 11+ nicht
+- Behebt: Überschreiben großer Dateien sowie mehrere Stabilitätsprobleme

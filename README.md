@@ -18,37 +18,79 @@ internal storage or an external SD card) from your computer via wi-fi.
 
 ## Notes
 
-Due to Android limitations, this app requires root (as on all Unixoid operating systems, it is not
-possible to open a port < 1024 otherwise, and the default SMB port is 445 and Windows doesn't work
-with anything else) for full functionality. Without root, you either need some sort of SMB client
-which allows configuring the port used (SimbaDroid uses port 4450 behind the scenes), or some kind
-of [port mapping setup](https://serverfault.com/questions/1011395/access-smb-over-a-custom-port/1065212#1065212)
-to allow Windows to transparently connect to port 4450.
+The downloads above are the releases of the original project. The changes described below (SMB2/SMB3, the
+settings, the fixes) are newer than those releases; to get them, build the app from this repository.
 
-Recent Windows 11 releases starting from 24H2 also allow specifying a port number when connecting to
-an SMB share from the command line, e.g PowerShell:
-```
-New-SmbMapping -LocalPath "Z:" -RemotePath "\\simbadroid.local\Internal" -TcpPort 4450
-```
-… respectively via the regular command line:
-```
-net use Z: \\simbadroid.local\Internal /TCPPORT:4450
-```
+### Protocol versions
 
-Due to [JFileServer](https://github.com/FileSysOrg/jfileserver) limitations, only SMBv1 is
-supported, which isn't ideal for modern Windows, either, but c'est la vie…
+SimbaDroid supports **SMB2 and SMB3** (dialects 2.0.2, 2.1, 3.0, 3.0.2 and 3.1.1), including message signing and
+AES encryption, and the old **SMB1** protocol for devices that cannot do anything else. Client and server agree on
+the newest version both support. SMB1 can be switched off in the settings, which is recommended if you do not need
+it.
 
-Since the app is mostly for my private use, at the moment there are no configuration options –
-shares for the internal storage (*"Internal"*) as well as an external SD card (*"External"* – if one
-is detected) are set up automatically and are accessible without authentication, so be careful about
-using this app in public networks. I might add some options for configuring your own custom shares
-and user authentication eventually, but no guarantees as to if and when.
+### Root is optional
+
+As on all Unixoid operating systems, an app cannot open a port < 1024 without root, and the default SMB port is 445.
+
+* **With root**, SimbaDroid redirects the standard ports to its own, and the phone is reachable like any other
+  file server: `\\simbadroid.local`, `\\simbadroid` or `\\<ip address>`.
+* **Without root**, the server is reachable on port **4450**, so you need an SMB client that lets you specify the
+  port. The app shows the address and port to use.
+
+Connecting to port 4450 (replace the address with the one shown in the app):
+
+| Client | How |
+| --- | --- |
+| Windows 11 24H2 or later | `net use Z: \\192.168.1.20\Internal /TCPPORT:4450`<br>or `New-SmbMapping -LocalPath "Z:" -RemotePath "\\192.168.1.20\Internal" -TcpPort 4450` |
+| Older Windows versions | Not possible directly. You need some kind of [port mapping setup](https://serverfault.com/questions/1011395/access-smb-over-a-custom-port/1065212#1065212) to allow Windows to transparently connect to port 4450. |
+| macOS | Finder → Go → Connect to Server → `smb://192.168.1.20:4450/Internal` |
+| Linux | `mount -t cifs //192.168.1.20/Internal /mnt/phone -o port=4450`, `smbclient //192.168.1.20/Internal -p 4450`, or `smb://192.168.1.20:4450/Internal` in the file manager |
+| Android / iOS file managers | Enter the address and set the port to 4450 |
+
+The server also announces itself via mDNS (`_smb._tcp`) with the correct port, so it may simply show up in the
+network view of macOS and Linux file managers.
+
+### Shares and access
+
+Shares for the internal storage (*"Internal"*) as well as an external SD card (*"External"* – if one is detected)
+are set up automatically.
+
+By default they are accessible **without authentication**, so be careful about using this app in public networks.
+In the *Settings* you can set a user name and password. Clients then have to log in, and can sign and encrypt the
+connection. Current Windows versions (Windows 11 24H2 and later) no longer connect to servers without a login
+unless you relax their security settings, so for those you will want to set credentials.
 
 `READ/WRITE/MANAGE_EXTERNAL_STORAGE` is required for filesystem access.
 
+### Limitations
+
+* The server does not run while the phone itself is the Wi-Fi hotspot.
+* Without root, NetBIOS names (`\\simbadroid`) do not resolve; use the IP address or `simbadroid.local`.
+* Not supported: oplocks/leases, durable handles, multichannel, DFS, alternate data streams, Kerberos.
+* Folder change notifications are accepted but never sent, so an open Explorer window does not refresh by itself
+  when files change on the phone.
+
 ## Compatibility
 
-SimbaDroid should run on Android 6 and newer, though only Android 6 and 14 have been tested so far.
+SimbaDroid should run on Android 6 and newer. The original author tested Android 6 and 14. The SMB2/SMB3 support
+and the other recent changes have been tested with automated tests of the server on a desktop JVM, but **not yet
+on an Android device** – see [code-review/verification.md](code-review/verification.md).
+
+## Building
+
+```
+./gradlew :jfileserver:test          # tests of the file server
+./gradlew :app:assembleDefaultDebug  # the app for Android 7+
+./gradlew :app:assembleOldApiDebug   # the app for Android 6
+```
+
+You need a JDK 17 or later (a full JDK, including `jlink`) and the Android SDK with platform 36.
+
+## Documentation
+
+* [architecture/](architecture/README.md) – how the app and the server are put together.
+* [code-review/](code-review/README.md) – the findings of a review of the code, how the changes were verified, and
+  in [code-review/improve/](code-review/improve/README.md) what was improved.
 
 ## Licenses
 
@@ -61,12 +103,18 @@ Portions of the code are provided under the Apache License, Version 2.0 (see apa
 from [the Noun Project](https://thenounproject.com/)  under the
 [CC BY 3.0 license](https://creativecommons.org/licenses/by/3.0/).
 
-_JFileServer_ is used under the LGPL-3.0 license (see lgpl-3.0.md and gpl-3.0.md). Currently,
-SimbaDroid utilises a [forked version](https://github.com/buttercookie42/jfileserver) with some
-additional fixes.
+_JFileServer_ is used under the LGPL-3.0 license (see lgpl-3.0.md and gpl-3.0.md). Its source code is
+included in this repository in the `jfileserver` directory. It is based on
+[this fork](https://github.com/buttercookie42/jfileserver) of the
+[original project](https://github.com/FileSysOrg/jfileserver) and has been modified: unused parts were
+removed, bugs were fixed and SMB2/SMB3 support was added. The modifications are licensed under the
+LGPL-3.0 as well; see `jfileserver/README.md` for details.
 
-_libsu_, _JmDNS_, _Apache Commons Lang_, _Guava_ and the _Android Support Library_ are used under
-the Apache License, Version 2.0
+_libsu_, _JmDNS_, _Apache Commons Lang_, _Guava_, _Gson_, _JNA_ and the _Android Support Library_ are
+used under the Apache License, Version 2.0
+
+The tests of the file server additionally use _JUnit_ (Eclipse Public License 1.0), _smbj_ (Apache
+License, Version 2.0) and _jcifs-ng_ (LGPL-2.1). These are not part of the app.
 
 _SLF4J_ is used under the **MIT license**:
 

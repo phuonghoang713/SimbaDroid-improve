@@ -1,0 +1,5 @@
+- Support for SMB2 and SMB3, including signing and encryption
+- Optional user name and password to restrict access
+- Show the address and port to use on devices without root
+- Fix the server not starting after granting "All files access" on Android 11+
+- Fix copying over existing large files, and several reliability problems
